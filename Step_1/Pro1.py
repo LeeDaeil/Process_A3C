@@ -14,8 +14,8 @@ class Pro1(multiprocessing.Process):    # multiprocessing 에서 process 를 상
             # 1. 메모리를 업데이트 시킨다. 여기에 원하는 함수가 들어 갈 수도있고, 인공지능 방법론이 들어 갈 수 있다.
             self.update_mem()
             self.iter += 1
-            # 2. 0.5초 대기
-            sleep(0.5)
+            # 2. 1초 대기
+            sleep(3)
 
     def update_mem(self):
         # 아직 해결을 못한 문제중 하나로 메모리를 업데이트를 시도 할 때 메모리의 오염 문제를
