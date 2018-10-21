@@ -1,0 +1,12 @@
+DEBUG:root:[UDPsocket-1] Initial_socket
+DEBUG:root:[Pro1-2] start process
+DEBUG:root:[UDPsocket-3] Initial_socket
+DEBUG:root:[Pro1-4] start process
+DEBUG:root:[UDPsocket-1] Start socket
+DEBUG:root:[UDPsocket-3] Start socket
+DEBUG:root:[Pro1-2] ('192.168.0.55', 35041)
+DEBUG:root:[Pro1-4] ('192.168.0.55', 42076)
+DEBUG:root:[Pro1-2] ('192.168.0.55', 35041)
+DEBUG:root:[Pro1-4] ('192.168.0.55', 42076)
+DEBUG:root:[Pro1-2] ('192.168.0.55', 35041)
+DEBUG:root:[Pro1-4] ('192.168.0.55', 42076)

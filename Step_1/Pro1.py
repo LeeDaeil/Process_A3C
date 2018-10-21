@@ -15,7 +15,7 @@ class Pro1(multiprocessing.Process):    # multiprocessing 에서 process 를 상
             self.update_mem()
             self.iter += 1
             # 2. 1초 대기
-            sleep(3)
+            sleep(0.5)
 
     def update_mem(self):
         # 아직 해결을 못한 문제중 하나로 메모리를 업데이트를 시도 할 때 메모리의 오염 문제를
