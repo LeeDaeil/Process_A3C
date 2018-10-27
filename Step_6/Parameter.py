@@ -4,3 +4,9 @@ class PARA:
 
     Remote_ip = '192.168.0.29'
     Remote_port = 7001
+
+    # select model
+    Model = 'LSTM'
+    # Model = 'DNN'
+
+    show_model = False
