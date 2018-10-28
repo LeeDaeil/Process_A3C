@@ -50,6 +50,7 @@ class A3Cagent(threading.Thread):
         A3C_local = A3C_local_network(Shared_actor_net, Shared_cric_net)
         self.local_actor_model = A3C_local.local_actor
         self.local_cric_model = A3C_local.local_cric
+        self.shared_actor_net = Shared_actor_net
 
     def _init_input_window_setting(self):
         '''
@@ -142,24 +143,18 @@ class A3Cagent(threading.Thread):
     def _set_init_cns(self):
         return self._send_control_signal(['KFZRUN'], [5])
 
-    def _while_run_cns(self):
-        self._run_cns()
-        while True:
-            self._update_shared_mem()
-            if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                break
     # ------------------------------------------------------------------
     # gym
     # ------------------------------------------------------------------
-    # model information
+
     def _init_model_information(self):
         self.avg_q_max = 0
         self.avg_loss = 0
         self.states, self.actions, self.rewards = [], [], []
         self.t_max = 30
         self.t = 0
-    # ------------------------------------------------------------------
-    # send action
+        self.score = 0
+
     def _gym_send_action(self, action):
         if action == 0:
             return self._send_control_signal(['KSWO33'], [0])
@@ -167,12 +162,28 @@ class A3Cagent(threading.Thread):
             return  self._send_control_signal(['KSWO33'], [1])
         # elif action == 2:
         #     return  self._send_control_signal(['KSWO33'], [1])
-    # ------------------------------------------------------------------
-    # reward
+
     def _gym_reward_done(self):
         reward = 1
-        done = False
+        if self.shared_mem_structure['KCNTOMS']['Val'] > 50:
+            done = True
+        else:
+            done = False
         return reward, done
+
+    def _gym_append_sample(self, input_window, policy, action, reward):
+        self.states.append(input_window)
+        act = np.zeros(np.shape(policy)[0])
+        act[action] = 1
+        self.actions.append(act)
+        self.rewards.append(reward)
+
+    def _gym_predict_action(self, input_window):
+        policy = self.local_actor_model.predict(input_window)[0]
+        action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
+        self.avg_q_max += np.amax(self.shared_actor_net.predict(input_window))
+        return policy, action
+
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
@@ -183,54 +194,60 @@ class A3Cagent(threading.Thread):
         #
         self._set_init_cns()
         sleep(1)
-        self._run_cns()
+        mode = 0
+
         while True:
             self._update_shared_mem()
-
-            if self.shared_mem_structure['KFZRUN']['Val'] == 4: # CNS 정지가 되었다는 신호
-                '''
-                A3C 에이전트가 동작하는 부분이 들어 감
-                1. 정지된 CNS의 현재 상태를 읽기
-                2.1 5 초 대기
-                2. 현재 상태에대한 A3C 에이전트가 t+1초의 액션 계산
-                3. 액션을 CNS에 전송
-                    self._send_control_signal(['para'], [action])
-                '''
-                # 1. 정지된 CNS의 현재 상태 읽기
-                input_window = self._make_input_window()
-
-                # 2.1. 5초 동안은 대기
-                if self.shared_mem_structure['KCNTOMS']['Val'] <= 30:
-                    self._send_control_signal(['KSWO33'], [0])
-                    # CNS 동작
+            if mode == 0:
+                if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
+                    mode += 1
+            elif mode == 1:
+                if self.shared_mem_structure['KFZRUN']['Val'] == 6:
                     self._run_cns()
-                elif np.shape(input_window)[1] == 2:
-                    # 동작 시작 ================================================================================
-                    done, step, score = False, 0, 0
-                    while not done:
-                        step += 1
-
+                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                    input_window = self._make_input_window()
+                    if np.shape(input_window)[1] == 2:
+                        mode += 1
+                    else:
+                        self._run_cns()
+            elif mode == 2:
+                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                    if self.shared_mem_structure['KCNTOMS']['Val'] > 30:
+                        input_window = self._make_input_window()
+                        mode += 1
+                    else:
+                        input_window = self._make_input_window()
+                        self._run_cns()
+            elif mode == 3:
+                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                    input_window = self._make_input_window()
+                    # 2.1 네트워크 액션 예측
+                    policy, action = self._gym_predict_action(input_window)
+                    # 2.2. 액션 전송
+                    self._gym_send_action(action)
+                    self._run_cns()
+                    mode += 1
+            elif mode == 4:
+                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                    # 2.4 t+1초의 상태에 대한 보상 검증
+                    reward, done = self._gym_reward_done()
+                    self.score += reward
+                    # 2.5 data box 에 append
+                    self._gym_append_sample(input_window, policy, action, reward)
+                    if done:
+                        mode += 1
+                    else:
+                        # 2.6 액션의 결과를 토대로 다시 업데이트
+                        input_window = self._make_input_window()
                         # 2.1 네트워크 액션 예측
-                        policy = self.local_actor_model.predict(input_window)[0]
-                        action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
+                        policy, action = self._gym_predict_action(input_window)
                         # 2.2. 액션 전송
                         self._gym_send_action(action)
-                        # 2.3 액션에 대한 CNS 데이터 업데이트
-                        self._while_run_cns()
-                        # 2.4 t+1초의 상태에 대한 보상 검증
-                        reward, done = self._gym_reward_done()
-                        # 2.5
-                        
-                    # 반복 n회  ================================================================================
-
-            # 특정 조건 ex. 6(30count) 초 넘어갈 경우 초기화
-            if self.shared_mem_structure['KCNTOMS']['Val'] >= 50:
-                self._set_init_cns()
-
-            # 만약 위에서 초기화 요청을 할경우 KFZRUN의 값은 6을 반환함. 따라서 이를 감시하다가
-            # KFZRUN을 3으로 바꾸면서 CNS run
-            if self.shared_mem_structure['KFZRUN']['Val'] == 6:
-                self._run_cns()
-                logging.debug('[{}] Reset_done'.format(self.name))
-                sleep(1)
+                        self._run_cns()
+            if mode == 5:
+                if self.shared_mem_structure['KFZRUN']['Val'] == 6:
+                    self._run_cns()
+                    mode = 0
+                else:
+                    self._set_init_cns()
     # ------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from Step_6.A3C import A3Cagent
 from Step_6.Parameter import PARA
 from Step_6.A3C_NETWORK import A3C_shared_network
+from time import  sleep
 
 class MainModel:
     def __init__(self):
@@ -21,11 +22,8 @@ class MainModel:
         jobs =[]
         for __ in self.worker:
             __.start()
+            sleep(1)
             jobs.append(__)
-
-        #for __ in jobs:
-        #    __.join()
-
 
 if __name__ == '__main__':
     test = MainModel()
