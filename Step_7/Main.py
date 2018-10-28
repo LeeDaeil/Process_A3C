@@ -26,11 +26,12 @@ class MainModel:
 
         A3C = A3C_shared_network()
 
+        # CNS1
         for i in range(0, 2):
-            self.worker.append(A3Cagent(Remote_ip=PARA.Remote_ip,
-                                        Remote_port=PARA.Remote_port + i,
-                                        CNS_ip=PARA.CNS_ip,
-                                        CNS_port=PARA.CNS_port + i,
+            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                        Remote_port=7100 + i,
+                                        CNS_ip='192.168.0.2',
+                                        CNS_port=7000 + i,
                                         Shared_actor_net=A3C.actor,
                                         Shared_cric_net=A3C.cric,
                                         Optimizer=A3C.optimizer,
@@ -39,11 +40,47 @@ class MainModel:
                                                      self.update_ops, self.summary_writer],
                                         Test_model=False,
                                         ))
-        for i in range(2, 4):
-            self.worker.append(A3Cagent(Remote_ip=PARA.Remote_ip,
-                                        Remote_port=PARA.Remote_port + i,
-                                        CNS_ip=PARA.CNS_test_ip,
-                                        CNS_port=PARA.CNS_test_port + i - 2,
+
+            self.worker[-1].start()
+            sleep(1)
+
+        # CNS2
+        for i in range(0, 20):
+            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                        Remote_port=7200 + i,
+                                        CNS_ip='192.168.0.11',
+                                        CNS_port=7000 + i,
+                                        Shared_actor_net=A3C.actor,
+                                        Shared_cric_net=A3C.cric,
+                                        Optimizer=A3C.optimizer,
+                                        Sess=self.sess,
+                                        Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                     self.update_ops, self.summary_writer],
+                                        Test_model=False,
+                                        ))
+            self.worker[-1].start()
+            sleep(1)
+        # CNS3
+        for i in range(0, 10):
+            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                        Remote_port=7300 + i,
+                                        CNS_ip='192.168.0.13',
+                                        CNS_port=7000 + i,
+                                        Shared_actor_net=A3C.actor,
+                                        Shared_cric_net=A3C.cric,
+                                        Optimizer=A3C.optimizer,
+                                        Sess=self.sess,
+                                        Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                     self.update_ops, self.summary_writer],
+                                        Test_model=False,
+                                        ))
+            self.worker[-1].start()
+            sleep(1)
+        for i in range(10, 20):
+            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                        Remote_port=7300 + i,
+                                        CNS_ip='192.168.0.13',
+                                        CNS_port=7000 + i,
                                         Shared_actor_net=A3C.actor,
                                         Shared_cric_net=A3C.cric,
                                         Optimizer=A3C.optimizer,
@@ -52,16 +89,18 @@ class MainModel:
                                                      self.update_ops, self.summary_writer],
                                         Test_model=True,
                                         ))
+            self.worker[-1].start()
+            sleep(1)
 
         # 멀티프로세스 시작
-        jobs =[]
-        for __ in self.worker:
-            __.start()
-            sleep(5)
+        #jobs =[]
+        #for __ in self.worker:
+        #    __.start()
+        #    sleep(5)
 
         # model save 부분
         while True:
-            sleep(2)
+            sleep(60)
             self._save_model(A3C)
 
     def _make_tensorboaed(self):
@@ -255,9 +294,8 @@ class A3Cagent(threading.Thread):
 
     def _init_model_information(self):
         self.avg_q_max = 0
-        self.avg_loss = 0
         self.states, self.actions, self.rewards = [], [], []
-        self.t_max = 3
+        self.t_max = 60
         self.t = 0
         self.score = 0
         self.step = 0
@@ -271,16 +309,19 @@ class A3Cagent(threading.Thread):
             return self._send_control_signal(['KSWO33', 'KSWO32'], [0, 1])
 
     def _gym_reward_done(self):
-        if self.shared_mem_structure['QPROLD']['Val'] > 0.03:
-            print('Success')
+        power = self.shared_mem_structure['QPROREL']['Val']
+        tick = self.shared_mem_structure['KCNTOMS']['Val']
+        upper_condition = tick/30000 + 7/300
+        stady_condition = tick/30000 + 11/600
+        low_condition = tick/30000 + 1/75
+        print(power, upper_condition, low_condition, tick)
+        if power >= low_condition and power <= upper_condition:
             reward = 1
+            done = False
         else:
             reward = 0
-
-        if self.shared_mem_structure['KCNTOMS']['Val'] > 300:
             done = True
-        else:
-            done = False
+
         return reward, done
 
     def _gym_append_sample(self, input_window, policy, action, reward):
@@ -298,6 +339,23 @@ class A3Cagent(threading.Thread):
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
         self.avg_q_max += np.amax(self.shared_actor_net.predict(input_window))
         return policy, action
+
+    def _gym_save_control_history(self, input_window, policy, action, reward):
+        if self.Test_model:
+            with open('./log/{}_test_control_history.txt'.format(episode_test), 'a') as f:
+                f.write('{}, {}, {}\n'.format(action, reward, input_window))
+
+        else:
+            with open('./log/{}_control_history.txt'.format(episode), 'a') as f:
+                f.write('{}, {}, {}\n'.format(action, reward, input_window))
+
+    def _gym_save_score_history(self):
+        if self.Test_model:
+            with open('./test_history', 'a') as f:
+                f.writelines('{}/{}\n'.format(episode_test, self.score))
+        else:
+            with open('./history', 'a') as f:
+                f.writelines('{}/{}\n'.format(episode, self.score))
 
     # ------------------------------------------------------------------
     # 네트워크 훈련 관련
@@ -331,7 +389,7 @@ class A3Cagent(threading.Thread):
         # 2.4 업데이트된 메인 네트워크를 가져와서 로컬 네트워크 업데이트
         self.local_actor_model.set_weights(self.shared_actor_net.get_weights())
         self.local_cric_model.set_weights(self.shared_cric_net.get_weights())
-        print("Shared_net_work update",self)
+        print("Shared_net_work update", self)
 
         # 2.5 간이 저장소 초기화
         self.states, self.actions, self.rewards = [], [], []
@@ -349,7 +407,8 @@ class A3Cagent(threading.Thread):
         self._set_init_cns()
         sleep(1)
         mode = 0
-
+        episode_test += 1
+        episode += 1
         while True:
             self._update_shared_mem()
             if mode == 0:
@@ -360,13 +419,13 @@ class A3Cagent(threading.Thread):
                     self._run_cns()
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
-                    if np.shape(input_window)[1] == 2:
+                    if np.shape(input_window)[1] == 10:
                         mode += 1
                     else:
                         self._run_cns()
             elif mode == 2:
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    if self.shared_mem_structure['KCNTOMS']['Val'] > 30:
+                    if self.shared_mem_structure['KCNTOMS']['Val'] > 60:
                         input_window = self._make_input_window()
                         mode += 1
                     else:
@@ -391,8 +450,9 @@ class A3Cagent(threading.Thread):
 
                     # 2.5 data box 에 append
                     self._gym_append_sample(input_window, policy, action, reward)
-                    logging.debug('[{}] input window\n{}'.format(self.name, input_window))
+                    # logging.debug('[{}] input window\n{}'.format(self.name, input_window))
                     # 2.5.1 수집된 데이터를 일정 시간이 되면, 또는 죽으면 업데이트
+                    self._gym_save_control_history(input_window, policy, action, reward)
                     if self.t >= self.t_max or done:
                         if self.Test_model:
                             pass
@@ -403,8 +463,10 @@ class A3Cagent(threading.Thread):
 
                     # 2.5.2 죽으면 정보 호출 및 텐서보드 업데이트
                     if done:
+                        # 운전 이력 저장
                         if self.Test_model:
                             episode_test += 1
+                            self._gym_save_score_history()
                             print("Episode:{}, Score:{}, Step:{}".format(episode_test, self.score, self.step))
                             stats = [self.score]
                             self.sess.run(self.update_ops[3], feed_dict={self.summary_placeholders[3]: float(stats[0])})
@@ -429,9 +491,10 @@ class A3Cagent(threading.Thread):
                             summary_str = self.sess.run(self.summary_op)
                             self.summary_writer.add_summary(summary_str, episode + 1)
 
-                        self.avg_q_max, self.avg_loss, self.score = 0, 0, 0
+                        self.avg_q_max, self.score = 0, 0
                         self.step = 0
                         mode += 1
+                        done = False
 
                     else:
                         # 2.6 액션의 결과를 토대로 다시 업데이트
