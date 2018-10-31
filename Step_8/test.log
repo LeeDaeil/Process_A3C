@@ -1,0 +1,24 @@
+2018-10-31 18:56:09,692 DEBUG [Thread-1] Initial_socket remote 192.168.0.29/7100, cns 192.168.0.55/7000
+2018-10-31 18:56:09,697 DEBUG [Thread-2] Initial_socket remote 192.168.0.29/7101, cns 192.168.0.55/7001
+2018-10-31 18:56:09,702 DEBUG [Thread-3] Initial_socket remote 192.168.0.29/7102, cns 192.168.0.55/7002
+2018-10-31 18:56:09,708 DEBUG [Thread-4] Initial_socket remote 192.168.0.29/7103, cns 192.168.0.55/7003
+2018-10-31 18:56:09,713 DEBUG [Thread-5] Initial_socket remote 192.168.0.29/7104, cns 192.168.0.55/7004
+2018-10-31 18:56:09,717 DEBUG [Thread-6] Initial_socket remote 192.168.0.29/7105, cns 192.168.0.55/7005
+2018-10-31 18:56:09,720 DEBUG [Thread-7] Initial_socket remote 192.168.0.29/7106, cns 192.168.0.55/7006
+2018-10-31 18:56:09,724 DEBUG [Thread-8] Initial_socket remote 192.168.0.29/7107, cns 192.168.0.55/7007
+2018-10-31 19:05:27,337 DEBUG [Thread-1] Initial_socket remote 192.168.0.29/7100, cns 192.168.0.55/7000
+2018-10-31 19:05:27,341 DEBUG [Thread-2] Initial_socket remote 192.168.0.29/7101, cns 192.168.0.55/7001
+2018-10-31 19:05:27,345 DEBUG [Thread-3] Initial_socket remote 192.168.0.29/7102, cns 192.168.0.55/7002
+2018-10-31 19:05:27,349 DEBUG [Thread-4] Initial_socket remote 192.168.0.29/7103, cns 192.168.0.55/7003
+2018-10-31 19:05:27,352 DEBUG [Thread-5] Initial_socket remote 192.168.0.29/7104, cns 192.168.0.55/7004
+2018-10-31 19:05:27,355 DEBUG [Thread-6] Initial_socket remote 192.168.0.29/7105, cns 192.168.0.55/7005
+2018-10-31 19:05:27,359 DEBUG [Thread-7] Initial_socket remote 192.168.0.29/7106, cns 192.168.0.55/7006
+2018-10-31 19:05:27,363 DEBUG [Thread-8] Initial_socket remote 192.168.0.29/7107, cns 192.168.0.55/7007
+2018-10-31 19:05:27,381 DEBUG [Thread-1] Start socket
+2018-10-31 19:05:28,364 DEBUG [Thread-2] Start socket
+2018-10-31 19:05:29,366 DEBUG [Thread-3] Start socket
+2018-10-31 19:05:30,368 DEBUG [Thread-4] Start socket
+2018-10-31 19:05:31,370 DEBUG [Thread-5] Start socket
+2018-10-31 19:05:32,373 DEBUG [Thread-6] Start socket
+2018-10-31 19:05:33,375 DEBUG [Thread-7] Start socket
+2018-10-31 19:05:34,385 DEBUG [Thread-8] Start socket
