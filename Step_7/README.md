@@ -25,3 +25,8 @@
     
 - A3C_NETWORK.py
     - A3C 에이전트의 네트워크 모델이 들어 있는 부분    
+
+### 메모
+변수 증가
+1. A3C_net_model , __init__ 조건에서 input shape 변경
+2. _make_input_window 에서 변수 추가

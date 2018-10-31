@@ -13,3 +13,5 @@ class PARA:
     # Model = 'DNN'
 
     show_model = False
+
+    show_input_windows = False

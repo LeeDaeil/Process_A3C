@@ -8,7 +8,8 @@ from Step_6.Parameter import PARA
 class A3C_net_model:
     def __init__(self):
         if PARA.Model == 'LSTM':
-            self.input_shape = (2, 2)  # basic LSTM (1, 2, 3) shape
+            # self.input_shape = (10, 2)  # basic LSTM (1, 2, 3) shape
+            self.input_shape = (10, 3)  # basic LSTM (1, 2, 3) shape
         elif PARA.Model == 'DNN':
             self.input_shape = (3,)  # basic DNN (1, 3) shape
         self.action_size = 3
@@ -17,9 +18,9 @@ class A3C_net_model:
         in_put = Input(shape=self.input_shape)
 
         if PARA.Model == 'LSTM':
-            hidden_layer = TimeDistributed(Dense(6), input_shape=self.input_shape)(in_put)
-            hidden_layer = LSTM(5, return_sequences=True)(hidden_layer)
-            hidden_layer = LSTM(3)(hidden_layer)
+            hidden_layer = TimeDistributed(Dense(64), input_shape=self.input_shape)(in_put)
+            hidden_layer = LSTM(32, return_sequences=True)(hidden_layer)
+            hidden_layer = LSTM(16)(hidden_layer)
         elif PARA.Model == 'DNN':
             hidden_layer = Dense(64, activation='relu')(in_put)
             hidden_layer = Dense(32, activation='relu')(hidden_layer)
