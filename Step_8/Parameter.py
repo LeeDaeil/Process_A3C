@@ -9,8 +9,8 @@ class PARA:
     Remote_port = 7001
 
     # select model
-    Model = 'LSTM'
-    # Model = 'DNN'
+    # Model = 'LSTM'
+    Model = 'DNN'
 
     show_model = False
 
