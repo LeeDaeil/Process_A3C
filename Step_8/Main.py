@@ -226,18 +226,6 @@ class A3Cagent(threading.Thread):
             self.input_window_box = deque(maxlen=1)
 
     def _init_model_information(self):
-        if PARA.Model == 'LSTM':
-            self.shape_of_input = [1, 2, 4]
-            '''
-            self.shape_of_input = [1, 2, 4] => (1, 2, 4)
-            '''
-        elif PARA.Model == 'DNN':
-            '''
-            self.shape_of_input = [1, 2, 4] => (2, 4)
-            '''
-            self.shape_of_input = [1, 1, 4]  # (1, 4)
-        self.shape_of_output = [3]
-
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
@@ -397,29 +385,15 @@ class A3Cagent(threading.Thread):
         self.rewards.append(reward)
 
     def _gym_predict_action(self, input_window):
-        '''
+        # policy = self.local_actor_model.predict(input_window)[0]
         policy = self.shared_actor_net.predict(np.reshape(input_window, [1, 4]))[0]
-        [1, 4] <- self.shape_of_input 에서 날아옴 [1, 1, 4]로 구성된 list임
-        '''
-        if PARA.Model == 'LSTM':
-            policy = self.shared_actor_net.predict(np.reshape(input_window,
-                                                              [self.shape_of_input[0],  # None
-                                                               self.shape_of_input[1],  # Time length
-                                                               self.shape_of_input[2]]  # Input dim
-                                                              ))
-        elif PARA.Model == 'DNN':
-            policy = self.shared_actor_net.predict(np.reshape(input_window,
-                                                              [self.shape_of_input[0],  # None
-                                                               self.shape_of_input[1]]  # Input dim
-                                                              ))
-        self.avg_q_max += np.amax(policy)
         if self.Test_model:
             # 검증 네트워크의 경우 결과를 정확하게 뱉음
-            action = np.argmax(policy[0])
+            action = np.argmax(policy)
         else:
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
-            action = np.random.choice(self.shape_of_output[0],  # [action number] list로 존재
-                                      1, p=policy[0])[0]
+            action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
+        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [1, 4])))
         return policy, action
 
     def _gym_save_control_logger(self, input_window, action, reward):
