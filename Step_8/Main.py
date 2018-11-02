@@ -28,6 +28,8 @@ class MainModel:
     def __init__(self):
         self.worker = []
         self._make_tensorboaed()
+        self.input_para = 5
+        self.output_para = 3
 
         self.actor, self.critic = self.build_model()
 
@@ -94,12 +96,12 @@ class MainModel:
         print("All Agent Start")
 
     def build_model(self):
-        state = Input(batch_shape=(None,  4))
-        shared = Dense(24, input_dim=4, activation='relu', kernel_initializer='glorot_uniform')(state)
+        state = Input(batch_shape=(None, self.input_para))
+        shared = Dense(24, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
         # shared = Dense(24, input_dim=4, activation='relu', kernel_initializer='glorot_uniform')(state)
 
         actor_hidden = Dense(24, activation='relu', kernel_initializer='glorot_uniform')(shared)
-        action_prob = Dense(3, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
+        action_prob = Dense(self.output_para, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
         value_hidden = Dense(24, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
@@ -117,7 +119,7 @@ class MainModel:
         return actor, critic
 
     def actor_optimizer(self):
-        action = K.placeholder(shape=(None, 3))
+        action = K.placeholder(shape=(None, self.output_para))
         advantages = K.placeholder(shape=(None, ))
 
         policy = self.actor.output
@@ -218,6 +220,7 @@ class A3Cagent(threading.Thread):
         :return: list형식의 입력 윈도우
         '''
         self.input_window_shape = self.shared_cric_net.get_input_shape_at(0)
+
         if PARA.Model == 'LSTM':
             # (none, time-length, parameter) -> 중에서 time-length 를 반환
             self.input_window_box = deque(maxlen=self.shared_cric_net.get_input_shape_at(0)[1])
@@ -226,6 +229,8 @@ class A3Cagent(threading.Thread):
             self.input_window_box = deque(maxlen=1)
 
     def _init_model_information(self):
+        self.operation_mode = 0.2
+
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
@@ -313,9 +318,10 @@ class A3Cagent(threading.Thread):
 
         input_window_temp = [
             power,
-            upper_condition - power,
-            power - low_condition,
-            stady_condition,
+            (upper_condition - power)*10,
+            (power - low_condition)*10,
+            (stady_condition)*10,
+            self.operation_mode,
 
             # self.shared_mem_structure['QPROLD']['Val'],
             # self.shared_mem_structure['KCNTOMS']['Val']/1000,
@@ -331,6 +337,26 @@ class A3Cagent(threading.Thread):
             return np.array([self.input_window_box])  # list를 np.array로 전환 (2,3) -> (1, 2, 3)
         elif PARA.Model == 'DNN':
             return np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
+
+    # ------------------------------------------------------------------
+    # 운전 모드 별 계산
+    # ------------------------------------------------------------------
+
+    def _calculator_operation_mode(self):
+        tick = self.shared_mem_structure['KCNTOMS']['Val']
+        if self.operation_mode == 0.2:      # 0.5%/min
+            base_condition = tick / 60000
+        elif self.operation_mode == 0.4:    # 1.0%/min
+            base_condition = tick / 30000
+        elif self.operation_mode == 0.6:    # 1.5%/min
+            base_condition = tick / 20000
+        elif self.operation_mode == 0.8:    # 2.0%/min
+            base_condition = tick / 15000
+
+        upper_condition = base_condition + 0.025
+        stady_condition = base_condition + 0.02
+        low_condition = base_condition + 0.015
+        return upper_condition, stady_condition, low_condition
 
     # ------------------------------------------------------------------
     # CNS 원격 제어 관련
@@ -386,14 +412,14 @@ class A3Cagent(threading.Thread):
 
     def _gym_predict_action(self, input_window):
         # policy = self.local_actor_model.predict(input_window)[0]
-        policy = self.shared_actor_net.predict(np.reshape(input_window, [1, 4]))[0]
+        policy = self.shared_actor_net.predict(np.reshape(input_window, [1, 5]))[0]
         if self.Test_model:
             # 검증 네트워크의 경우 결과를 정확하게 뱉음
             action = np.argmax(policy)
         else:
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
-        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [1, 4])))
+        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [1, 5])))
         return policy, action
 
     def _gym_save_control_logger(self, input_window, action, reward):
@@ -431,7 +457,7 @@ class A3Cagent(threading.Thread):
         discounted_rewards = np.zeros_like(rewards)
         running_add = 0
         if not done:
-            running_add = self.shared_cric_net.predict(np.reshape(self.states[-1], (1, 4)))[0]
+            running_add = self.shared_cric_net.predict(np.reshape(self.states[-1], (1, 5)))[0]
         for t in reversed(range(0, len(rewards))):
             running_add = running_add * 0.99 + rewards[t]
             discounted_rewards[t] = running_add
@@ -474,7 +500,7 @@ class A3Cagent(threading.Thread):
                     self._run_cns()
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
-                    if np.shape(input_window)[1] == 4:
+                    if np.shape(input_window)[1] == 5:
                         mode += 1
                     else:
                         self._run_cns()
@@ -511,6 +537,11 @@ class A3Cagent(threading.Thread):
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
+                        # 운전 목표 변화
+                        if self.operation_mode == 0.8:
+                            self.operation_mode = 0.2 # 0.5% 출력으로 초기화
+                        else:
+                            self.operation_mode += 0.2 # 0.5% -> 1.0%, 1.0% -> 1.5% 출력으로 초기화
 
                         if self.Test_model:
                             pass
