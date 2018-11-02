@@ -420,9 +420,6 @@ class A3Cagent(threading.Thread):
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
             action = np.random.choice(self.shape_of_output[0],  # [action number] list로 존재
                                       1, p=policy[0])[0]
-        '''
-        ## 2018 11 01 수정완료
-        '''
         return policy, action
 
     def _gym_save_control_logger(self, input_window, action, reward):
