@@ -4,7 +4,7 @@ from keras import backend as K
 import gym
 from keras.layers import Dense, Input, Dropout
 from keras.models import Model
-from keras.optimizers import Adam
+from keras.optimizers import Adam, RMSprop
 from keras import backend as K
 #------------------------------------------------------------------
 import socket
@@ -16,6 +16,9 @@ from time import sleep
 from collections import deque
 from Step_8.Parameter import PARA
 #------------------------------------------------------------------
+import os
+import shutil
+#------------------------------------------------------------------
 import logging
 import logging.handlers
 logging.basicConfig(filename='./test.log', format='%(asctime)s %(levelname)s %(message)s', level=logging.DEBUG)
@@ -26,9 +29,10 @@ episode_test = 0
 
 class MainModel:
     def __init__(self):
+        self._make_folder()
         self.worker = []
         self._make_tensorboaed()
-        self.input_para = 5
+        self.input_para = 6
         self.output_para = 3
 
         self.actor, self.critic = self.build_model()
@@ -97,13 +101,13 @@ class MainModel:
 
     def build_model(self):
         state = Input(batch_shape=(None, self.input_para))
-        shared = Dense(24, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
-        # shared = Dense(24, input_dim=4, activation='relu', kernel_initializer='glorot_uniform')(state)
+        shared = Dense(40, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
+        # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
 
-        actor_hidden = Dense(24, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(20, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(self.output_para, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(24, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(9, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -132,7 +136,8 @@ class MainModel:
 
         actor_loss = loss + 0.01*entropy
 
-        optimizer = Adam(lr=0.001)
+        optimizer = Adam(lr=0.01)
+        # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
         updates = optimizer.get_updates(self.actor.trainable_weights, [], actor_loss)
         train = K.function([self.actor.input, action, advantages], [], updates=updates)
         return train
@@ -145,7 +150,8 @@ class MainModel:
 
         loss = K.mean(K.square(discounted_reward - value))
 
-        optimizer = Adam(lr=0.001)
+        optimizer = Adam(lr=0.01)
+        # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
         updates = optimizer.get_updates(self.critic.trainable_weights, [], loss)
         train = K.function([self.critic.input, discounted_reward], [], updates=updates)
         return train
@@ -177,6 +183,17 @@ class MainModel:
         summary_op = tf.summary.merge_all()
 
         return summary_placeholders, updata_ops, summary_op
+
+    def _make_folder(self):
+        fold_list = ['./a3c', './log', './model']
+        for __ in fold_list:
+            if os.path.isdir(__):
+                shutil.rmtree(__)
+                sleep(1)
+                os.mkdir(__)
+            else:
+                os.mkdir(__)
+
 
 class A3Cagent(threading.Thread):
     def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Shared_actor_net, Shared_cric_net, Optimizer, Sess, Summary_ops, Test_model):
@@ -236,6 +253,12 @@ class A3Cagent(threading.Thread):
         self.action_log, self.reward_log, self.input_window_log = [], [], []
         self.score = 0
         self.step = 0
+
+        self.update_t = 0
+        self.update_t_limit = 250
+
+        self.input_dim = 1
+        self.input_number = 6
 
     def _init_tensorboard(self, Sess, Summary_ops):
         self.sess = Sess
@@ -318,6 +341,7 @@ class A3Cagent(threading.Thread):
 
         input_window_temp = [
             power,
+            power / 2,
             (upper_condition - power)*10,
             (power - low_condition)*10,
             (stady_condition)*10,
@@ -327,6 +351,8 @@ class A3Cagent(threading.Thread):
             # self.shared_mem_structure['KCNTOMS']['Val']/1000,
             # self.shared_mem_structure['KBCDO20']['Val'],
         ]
+        if len(input_window_temp) != self.input_number:
+            logging.error('[{}] _make_input_window ERROR'.format(self))
         self.input_window_box.append(input_window_temp)
 
         # logging.debug('[{}] input_window_box_shape:{} / input_window_shape_model:{}'.format(self.name,
@@ -387,7 +413,7 @@ class A3Cagent(threading.Thread):
         low_condition = tick/30000 + 1/75
         # print(power, upper_condition, low_condition, tick)
 
-        if self.step == 600:
+        if self.step == 400:
             reward = 0
             done = True
         else:
@@ -412,14 +438,15 @@ class A3Cagent(threading.Thread):
 
     def _gym_predict_action(self, input_window):
         # policy = self.local_actor_model.predict(input_window)[0]
-        policy = self.shared_actor_net.predict(np.reshape(input_window, [1, 5]))[0]
+        policy = self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim, self.input_number]))[0]
         if self.Test_model:
             # 검증 네트워크의 경우 결과를 정확하게 뱉음
             action = np.argmax(policy)
         else:
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
-        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [1, 5])))
+        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim,
+                                                                                          self.input_number])))
         return policy, action
 
     def _gym_save_control_logger(self, input_window, action, reward):
@@ -457,7 +484,8 @@ class A3Cagent(threading.Thread):
         discounted_rewards = np.zeros_like(rewards)
         running_add = 0
         if not done:
-            running_add = self.shared_cric_net.predict(np.reshape(self.states[-1], (1, 5)))[0]
+            running_add = self.shared_cric_net.predict(np.reshape(self.states[-1], (self.input_dim,
+                                                                                    self.input_number)))[0]
         for t in reversed(range(0, len(rewards))):
             running_add = running_add * 0.99 + rewards[t]
             discounted_rewards[t] = running_add
@@ -475,6 +503,22 @@ class A3Cagent(threading.Thread):
         self.optimizer[0]([self.states, self.actions, advantages])
         self.optimizer[1]([self.states, discounted_rewards])
         self.states, self.actions, self.rewards = [], [], []
+    # ------------------------------------------------------------------
+    # 기타 편의 용
+    # ------------------------------------------------------------------
+
+    def _add_function_routine(self, input_window):
+        reward = 1
+        self.score += reward
+        self.step += 1
+        self.update_t += 1
+        self._gym_save_control_logger(input_window[0], 0, reward)
+        input_window = self._make_input_window()
+        if PARA.show_input_windows:
+            logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
+        self._gym_send_action(0)
+        self._run_cns()
+        return input_window
 
     # ------------------------------------------------------------------
     def run(self):
@@ -490,7 +534,7 @@ class A3Cagent(threading.Thread):
         self._set_init_cns()
         sleep(1)
         mode = 0
-        while True:
+        while episode < 2000:
             self._update_shared_mem()
             if mode == 0:
                 if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
@@ -500,7 +544,7 @@ class A3Cagent(threading.Thread):
                     self._run_cns()
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
-                    if np.shape(input_window)[1] == 5:
+                    if np.shape(input_window)[1] == self.input_number:
                         mode += 1
                     else:
                         self._run_cns()
@@ -527,17 +571,25 @@ class A3Cagent(threading.Thread):
                     reward, done = self._gym_reward_done()
                     self.score += reward
                     self.step += 1
+                    self.update_t += 1
 
                     # 2.5 data box 에 append
                     self._gym_append_sample(input_window[0], policy, action, reward)
                     self._gym_save_control_logger(input_window[0], action, reward)
                     logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
 
+                    if self.update_t > self.update_t_limit and done != True:
+                        self.train_episode(self.step != 701)
+                        self.update_t = 0
+                    else:
+                        pass
+
                     # 2.5.2 죽으면 정보 호출 및 텐서보드 업데이트
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
                         # 운전 목표 변화
+
                         if self.operation_mode == 0.8:
                             self.operation_mode = 0.2 # 0.5% 출력으로 초기화
                         else:
@@ -564,7 +616,7 @@ class A3Cagent(threading.Thread):
 
                         else:
                             episode += 1
-                            self.train_episode(self.step != 601)
+                            self.train_episode(self.step != 701)
                             self._gym_save_control_history()
                             self.action_log, self.reward_log, self.input_window_log = [], [], []
                             print("[TRAIN]{} Episode:{}, Score:{}, Step:{}".format(episode, self.name, self.score,
@@ -584,6 +636,8 @@ class A3Cagent(threading.Thread):
 
                         self.avg_q_max, self.score = 0, 0
                         self.step = 0
+                        self.update_t = 0
+
                         mode += 5
                         done = False
                     else:
@@ -597,49 +651,13 @@ class A3Cagent(threading.Thread):
                         self._gym_send_action(action)
                         self._run_cns()
                         mode += 1
-            if mode == 5:
+            if mode == 5 or mode == 6 or mode == 7:
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    reward = 1
-                    self.score += reward
-                    self.step += 1
-                    input_window = self._make_input_window()
-                    if PARA.show_input_windows:
-                        logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
-                    self._gym_send_action(0)
-                    self._run_cns()
-                    mode += 1
-            if mode == 6:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    reward = 1
-                    self.score += reward
-                    self.step += 1
-                    input_window = self._make_input_window()
-                    if PARA.show_input_windows:
-                        logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
-                    self._gym_send_action(0)
-                    self._run_cns()
-                    mode += 1
-            if mode == 7:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    reward = 1
-                    self.score += reward
-                    self.step += 1
-                    input_window = self._make_input_window()
-                    if PARA.show_input_windows:
-                        logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
-                    self._gym_send_action(0)
-                    self._run_cns()
+                    input_window = self._add_function_routine(input_window)
                     mode += 1
             if mode == 8:
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    reward = 1
-                    self.score += reward
-                    self.step += 1
-                    input_window = self._make_input_window()
-                    if PARA.show_input_windows:
-                        logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
-                    self._gym_send_action(0)
-                    self._run_cns()
+                    input_window = self._add_function_routine(input_window)
                     mode -= 4
             if mode == 9:
                 if self.shared_mem_structure['KFZRUN']['Val'] == 6:
