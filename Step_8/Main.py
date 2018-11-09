@@ -36,8 +36,9 @@ class MainModel:
         self.output_para = 3
 
         self.actor, self.critic = self.build_model()
+        self.optimizer = [self.actor_optimizer(self.actor), self.critic_optimizer(self.critic)]
 
-        self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
+
 
     def _run(self):
         for i in range(0, 20):
@@ -81,18 +82,6 @@ class MainModel:
                                                      self.update_ops, self.summary_writer],
                                         Test_model=False,
                                         ))
-        # CNS1
-        # self.worker = [A3Cagent(Remote_ip='192.168.0.29',
-        #                                 Remote_port=7000 + i,
-        #                                 CNS_ip='192.168.0.55',
-        #                                 CNS_port=7000 + i,
-        #                                 Shared_actor_net=self.actor,
-        #                                 Shared_cric_net=self.critic,
-        #                                 Optimizer=self.optimizer,
-        #                                 Sess=self.sess,
-        #                                 Summary_ops=[self.summary_op, self.summary_placeholders,
-        #                                              self.update_ops, self.summary_writer],
-        #                                 Test_model=False) for i in range(1, 2)]
 
         for __ in self.worker:
            __.start()
@@ -122,11 +111,11 @@ class MainModel:
 
         return actor, critic
 
-    def actor_optimizer(self):
+    def actor_optimizer(self, actor):
         action = K.placeholder(shape=(None, self.output_para))
         advantages = K.placeholder(shape=(None, ))
 
-        policy = self.actor.output
+        policy = actor.output
 
         good_prob = K.sum(action * policy, axis=1)
         eligibility = K.log(good_prob + 1e-10) * K.stop_gradient(advantages)
@@ -138,22 +127,22 @@ class MainModel:
 
         optimizer = Adam(lr=0.01)
         # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
-        updates = optimizer.get_updates(self.actor.trainable_weights, [], actor_loss)
-        train = K.function([self.actor.input, action, advantages], [], updates=updates)
+        updates = optimizer.get_updates(actor.trainable_weights, [], actor_loss)
+        train = K.function([actor.input, action, advantages], [], updates=updates)
         return train
 
     # make loss function for Value approximation
-    def critic_optimizer(self):
+    def critic_optimizer(self, critic):
         discounted_reward = K.placeholder(shape=(None, ))
 
-        value = self.critic.output
+        value = critic.output
 
         loss = K.mean(K.square(discounted_reward - value))
 
         optimizer = Adam(lr=0.01)
         # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
-        updates = optimizer.get_updates(self.critic.trainable_weights, [], loss)
-        train = K.function([self.critic.input, discounted_reward], [], updates=updates)
+        updates = optimizer.get_updates(critic.trainable_weights, [], loss)
+        train = K.function([critic.input, discounted_reward], [], updates=updates)
         return train
 
     def _save_model(self, A3C):
@@ -224,7 +213,7 @@ class A3Cagent(threading.Thread):
 
         logging.debug('[{}] Initial_socket remote {}/{}, cns {}/{}'.format(self.name,
                                                                            self.Remote_ip, self.Remote_port
-                                                                           ,self.CNS_ip, self.CNS_port))
+                                                                           , self.CNS_ip, self.CNS_port))
 
     def _init_shared_model_setting(self, Shared_actor_net, Shared_cric_net, Optimizer):
         self.shared_actor_net = Shared_actor_net
@@ -246,7 +235,7 @@ class A3Cagent(threading.Thread):
             self.input_window_box = deque(maxlen=1)
 
     def _init_model_information(self):
-        self.operation_mode = 0.2
+        self.operation_mode = 0.4
 
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
@@ -326,30 +315,38 @@ class A3Cagent(threading.Thread):
 
         self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
 
-    def _make_input_window(self):
-        '''
-        ********** 주된 편집
-        :return:
-        '''
+    # ------------------------------------------------------------------
+    # 운전 모드 별 계산
+    # ------------------------------------------------------------------
 
-        power = self.shared_mem_structure['QPROREL']['Val']
+    def _calculator_operation_mode(self):
         tick = self.shared_mem_structure['KCNTOMS']['Val']
-        upper_condition = tick / 30000 + 7 / 300
-        stady_condition = tick / 30000 + 11 / 600
-        low_condition = tick / 30000 + 1 / 75
+        if self.operation_mode == 0.2:      # 0.5%/min
+            base_condition = tick / 60000
+        elif self.operation_mode == 0.4:    # 1.0%/min
+            base_condition = tick / 30000
+        elif self.operation_mode == 0.6:    # 1.5%/min
+            base_condition = tick / 20000
+        elif self.operation_mode == 0.8:    # 2.0%/min
+            base_condition = tick / 15000
+        else:
+            print('??')
+        upper_condition = base_condition + 0.022
+        stady_condition = base_condition + 0.02
+        low_condition = base_condition + 0.018
+        return upper_condition, stady_condition, low_condition
 
+    def _make_input_window(self):
+        power = self.shared_mem_structure['QPROREL']['Val']
+        upper_condition, stady_condition, low_condition = self._calculator_operation_mode()
 
         input_window_temp = [
             power,
             power / 2,
             (upper_condition - power)*10,
             (power - low_condition)*10,
-            (stady_condition)*10,
-            self.operation_mode,
-
-            # self.shared_mem_structure['QPROLD']['Val'],
-            # self.shared_mem_structure['KCNTOMS']['Val']/1000,
-            # self.shared_mem_structure['KBCDO20']['Val'],
+            stady_condition,
+            self.operation_mode/10,
         ]
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
@@ -365,26 +362,6 @@ class A3Cagent(threading.Thread):
             return np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
 
     # ------------------------------------------------------------------
-    # 운전 모드 별 계산
-    # ------------------------------------------------------------------
-
-    def _calculator_operation_mode(self):
-        tick = self.shared_mem_structure['KCNTOMS']['Val']
-        if self.operation_mode == 0.2:      # 0.5%/min
-            base_condition = tick / 60000
-        elif self.operation_mode == 0.4:    # 1.0%/min
-            base_condition = tick / 30000
-        elif self.operation_mode == 0.6:    # 1.5%/min
-            base_condition = tick / 20000
-        elif self.operation_mode == 0.8:    # 2.0%/min
-            base_condition = tick / 15000
-
-        upper_condition = base_condition + 0.025
-        stady_condition = base_condition + 0.02
-        low_condition = base_condition + 0.015
-        return upper_condition, stady_condition, low_condition
-
-    # ------------------------------------------------------------------
     # CNS 원격 제어 관련
     # ------------------------------------------------------------------
     def _run_cns(self):
@@ -397,23 +374,37 @@ class A3Cagent(threading.Thread):
     # gym
     # ------------------------------------------------------------------
 
+    def _gym_send_action_append(self, parameter, value):
+        for __ in range(len(parameter)):
+            self.para.append(parameter[__])
+            self.val.append(value[__])
+
     def _gym_send_action(self, action):
+        power = self.shared_mem_structure['QPROREL']['Val']
+        self.para = []
+        self.val = []
+        if self.shared_mem_structure['KLAMPO22']['Val'] == 0 and power >= 0.10:
+            logging.debug('[{}] Tripblock ON\n'.format(self.name))
+            self._gym_send_action_append(['KSWO22', 'KSWO21'], [1, 1])
+
+        if power >= 0.04 and self.shared_mem_structure['KBCDO17']['Val'] <= 1800:
+            logging.debug('[{}] Turbin UP {}\n'.format(self.name, self.shared_mem_structure['KBCDO17']['Val']))
+            self._gym_send_action_append(['KSWO213'], [1])
+
         if action == 0:
-            return self._send_control_signal(['KSWO33', 'KSWO32'], [0, 0])
+            self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 0])
         elif action == 1:
-            return self._send_control_signal(['KSWO33', 'KSWO32'], [1, 0])
+            self._gym_send_action_append(['KSWO33', 'KSWO32'], [1, 0])
         elif action == 2:
-            return self._send_control_signal(['KSWO33', 'KSWO32'], [0, 1])
+            self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 1])
+
+        return self._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
         power = self.shared_mem_structure['QPROREL']['Val']
-        tick = self.shared_mem_structure['KCNTOMS']['Val']
-        upper_condition = tick/30000 + 7/300
-        stady_condition = tick/30000 + 11/600
-        low_condition = tick/30000 + 1/75
-        # print(power, upper_condition, low_condition, tick)
+        upper_condition, stady_condition, low_condition = self._calculator_operation_mode()
 
-        if self.step == 400:
+        if self.step == 600:
             reward = 0
             done = True
         else:
@@ -515,7 +506,7 @@ class A3Cagent(threading.Thread):
         self._gym_save_control_logger(input_window[0], 0, reward)
         input_window = self._make_input_window()
         if PARA.show_input_windows:
-            logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
+            logging.debug('[{}] Input_window {}'.format(self.name, input_window))
         self._gym_send_action(0)
         self._run_cns()
         return input_window
@@ -534,7 +525,7 @@ class A3Cagent(threading.Thread):
         self._set_init_cns()
         sleep(1)
         mode = 0
-        while episode < 2000:
+        while episode < 10000:
             self._update_shared_mem()
             if mode == 0:
                 if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
@@ -588,12 +579,25 @@ class A3Cagent(threading.Thread):
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
-                        # 운전 목표 변화
 
-                        if self.operation_mode == 0.8:
-                            self.operation_mode = 0.2 # 0.5% 출력으로 초기화
-                        else:
-                            self.operation_mode += 0.2 # 0.5% -> 1.0%, 1.0% -> 1.5% 출력으로 초기화
+                        # 운전 목표 변화
+                        # if self.operation_mode == 0.8:
+                        #     self.operation_mode = 0.2   # 0.5% 출력으로 초기화
+                        # elif self.operation_mode == 0.6:
+                        #     self.operation_mode = 0.8
+                        # elif self.operation_mode == 0.4:
+                        #     self.operation_mode = 0.6
+                        # elif self.operation_mode == 0.2:
+                        #     self.operation_mode = 0.4
+
+                        # if self.operation_mode == 0.4:
+                        #     self.operation_mode = 0.2   # 0.5% 출력으로 초기화
+                        # elif self.operation_mode == 0.2:
+                        #     self.operation_mode = 0.4
+                        # elif self.operation_mode == 0.4:
+                        #     self.operation_mode = 0.6
+                        # elif self.operation_mode == 0.2:
+                        #     self.operation_mode = 0.4
 
                         if self.Test_model:
                             pass
