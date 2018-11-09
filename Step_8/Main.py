@@ -90,13 +90,13 @@ class MainModel:
 
     def build_model(self):
         state = Input(batch_shape=(None, self.input_para))
-        shared = Dense(40, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
+        shared = Dense(64, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
         # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
 
-        actor_hidden = Dense(20, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(32, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(self.output_para, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(9, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(16, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -105,9 +105,8 @@ class MainModel:
         actor._make_predict_function()
         critic._make_predict_function()
 
-        with open('./Model_shape', 'w') as f:
-            f.write('{}\n'.format(actor.summary()))
-            f.write('{}\n'.format(critic.summary()))
+        actor.summary(print_fn=logging.info)
+        critic.summary(print_fn=logging.info)
 
         return actor, critic
 
@@ -384,11 +383,11 @@ class A3Cagent(threading.Thread):
         self.para = []
         self.val = []
         if self.shared_mem_structure['KLAMPO22']['Val'] == 0 and power >= 0.10:
-            logging.debug('[{}] Tripblock ON\n'.format(self.name))
+            logging.debug('[{}] Tripblock ON'.format(self.name))
             self._gym_send_action_append(['KSWO22', 'KSWO21'], [1, 1])
 
         if power >= 0.04 and self.shared_mem_structure['KBCDO17']['Val'] <= 1800:
-            logging.debug('[{}] Turbin UP {}\n'.format(self.name, self.shared_mem_structure['KBCDO17']['Val']))
+            logging.debug('[{}] Turbin UP {}'.format(self.name, self.shared_mem_structure['KBCDO17']['Val']))
             self._gym_send_action_append(['KSWO213'], [1])
 
         if action == 0:
@@ -648,13 +647,18 @@ class A3Cagent(threading.Thread):
                         # 2.6 액션의 결과를 토대로 다시 업데이트
                         input_window = self._make_input_window()
                         if PARA.show_input_windows:
-                            logging.debug('[{}] Input_window\n{}'.format(self.name, input_window))
+                            logging.debug('[{}] Input_window {}'.format(self.name, input_window))
                         # 2.1 네트워크 액션 예측
                         policy, action = self._gym_predict_action(input_window[0])  # (4,)
                         # 2.2. 액션 전송
                         self._gym_send_action(action)
                         self._run_cns()
-                        mode += 1
+
+                        if self.operation_mode == 0.2:
+                            mode += 1
+                        elif self.operation_mode == 0.4:
+                            mode += 4
+
             if mode == 5 or mode == 6 or mode == 7:
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._add_function_routine(input_window)
