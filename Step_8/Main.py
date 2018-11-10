@@ -88,6 +88,10 @@ class MainModel:
            sleep(1)
         print("All Agent Start")
 
+        while True:
+            sleep(60)
+            self._save_model()
+
     def build_model(self):
         state = Input(batch_shape=(None, self.input_para))
         shared = Dense(64, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
@@ -144,9 +148,9 @@ class MainModel:
         train = K.function([critic.input, discounted_reward], [], updates=updates)
         return train
 
-    def _save_model(self, A3C):
-        A3C.actor.save_weights("./Model/A3C_actor")
-        A3C.cric.save_weights("./Model/A3C_cric")
+    def _save_model(self):
+        self.actor.save_weights("./Model/A3C_actor")
+        self.critic.save_weights("./Model/A3C_cric")
 
     def _make_tensorboaed(self):
         self.sess = tf.InteractiveSession()
@@ -329,7 +333,8 @@ class A3Cagent(threading.Thread):
         elif self.operation_mode == 0.8:    # 2.0%/min
             base_condition = tick / 15000
         else:
-            print('??')
+            print('Error calculator function')
+
         upper_condition = base_condition + 0.022
         stady_condition = base_condition + 0.02
         low_condition = base_condition + 0.018
@@ -566,8 +571,8 @@ class A3Cagent(threading.Thread):
                     # 2.5 data box 에 append
                     self._gym_append_sample(input_window[0], policy, action, reward)
                     self._gym_save_control_logger(input_window[0], action, reward)
-                    logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
-
+                    if PARA.save_input_log:
+                        logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
                     if self.update_t > self.update_t_limit and done != True:
                         self.train_episode(self.step != 701)
                         self.update_t = 0
@@ -578,25 +583,6 @@ class A3Cagent(threading.Thread):
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
-
-                        # 운전 목표 변화
-                        # if self.operation_mode == 0.8:
-                        #     self.operation_mode = 0.2   # 0.5% 출력으로 초기화
-                        # elif self.operation_mode == 0.6:
-                        #     self.operation_mode = 0.8
-                        # elif self.operation_mode == 0.4:
-                        #     self.operation_mode = 0.6
-                        # elif self.operation_mode == 0.2:
-                        #     self.operation_mode = 0.4
-
-                        # if self.operation_mode == 0.4:
-                        #     self.operation_mode = 0.2   # 0.5% 출력으로 초기화
-                        # elif self.operation_mode == 0.2:
-                        #     self.operation_mode = 0.4
-                        # elif self.operation_mode == 0.4:
-                        #     self.operation_mode = 0.6
-                        # elif self.operation_mode == 0.2:
-                        #     self.operation_mode = 0.4
 
                         if self.Test_model:
                             pass

@@ -15,3 +15,5 @@ class PARA:
     show_model = False
 
     show_input_windows = False
+
+    save_input_log = False
