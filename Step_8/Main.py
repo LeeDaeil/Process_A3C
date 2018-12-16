@@ -40,48 +40,65 @@ class MainModel:
         self.actor, self.critic = self.build_model()
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
+        self.test = True
+
     def _run(self):
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7100 + i,
-                                        CNS_ip='192.168.0.2',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
-        # CNS2
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7200 + i,
-                                        CNS_ip='192.168.0.11',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
-        # CNS3
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7300 + i,
-                                        CNS_ip='192.168.0.13',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
+        if self.test:
+            for i in range(1, 3):
+                self.worker.append(A3Cagent(Remote_ip='',
+                                            Remote_port=7000 + i,
+                                            CNS_ip='192.168.0.55',
+                                            CNS_port=7000 + i,
+                                            Shared_actor_net=self.actor,
+                                            Shared_cric_net=self.critic,
+                                            Optimizer=self.optimizer,
+                                            Sess=self.sess,
+                                            Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                         self.update_ops, self.summary_writer],
+                                            Test_model=False,
+                                            ))
+        else:
+            for i in range(0, 20):
+                self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                            Remote_port=7100 + i,
+                                            CNS_ip='192.168.0.2',
+                                            CNS_port=7000 + i,
+                                            Shared_actor_net=self.actor,
+                                            Shared_cric_net=self.critic,
+                                            Optimizer=self.optimizer,
+                                            Sess=self.sess,
+                                            Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                         self.update_ops, self.summary_writer],
+                                            Test_model=False,
+                                            ))
+            # CNS2
+            for i in range(0, 20):
+                self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                            Remote_port=7200 + i,
+                                            CNS_ip='192.168.0.11',
+                                            CNS_port=7000 + i,
+                                            Shared_actor_net=self.actor,
+                                            Shared_cric_net=self.critic,
+                                            Optimizer=self.optimizer,
+                                            Sess=self.sess,
+                                            Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                         self.update_ops, self.summary_writer],
+                                            Test_model=False,
+                                            ))
+            # CNS3
+            for i in range(0, 20):
+                self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
+                                            Remote_port=7300 + i,
+                                            CNS_ip='192.168.0.13',
+                                            CNS_port=7000 + i,
+                                            Shared_actor_net=self.actor,
+                                            Shared_cric_net=self.critic,
+                                            Optimizer=self.optimizer,
+                                            Sess=self.sess,
+                                            Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                         self.update_ops, self.summary_writer],
+                                            Test_model=False,
+                                            ))
 
         for __ in self.worker:
            __.start()
