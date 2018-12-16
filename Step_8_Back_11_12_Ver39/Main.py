@@ -26,19 +26,18 @@ import matplotlib.pyplot as plt
 episode = 0
 episode_test = 0
 Max_score = 0       # if A3C model get Max_score, A3C model will draw the Max_score grape
-FINISH_TRAIN = False
-FINISH_TRAIN_CONDITION = 2.00
 
 class MainModel:
     def __init__(self):
         self._make_folder()
         self.worker = []
         self._make_tensorboaed()
-        self.input_para = 4
+        self.input_para = 6
         self.output_para = 3
 
         self.actor, self.critic = self.build_model()
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
+
 
     def _run(self):
         for i in range(0, 20):
@@ -94,13 +93,13 @@ class MainModel:
 
     def build_model(self):
         state = Input(batch_shape=(None, self.input_para))
-        shared = Dense(32, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
+        shared = Dense(8, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
         # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
 
-        actor_hidden = Dense(16, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(4, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(self.output_para, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(8, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(2, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -238,22 +237,20 @@ class A3Cagent(threading.Thread):
             self.input_window_box = deque(maxlen=1)
 
     def _init_model_information(self):
-        self.operation_mode = 0.4
+        self.operation_mode = 0.2
 
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
         self.score = 0
         self.step = 0
-        self.average_max_step = 0
 
         self.update_t = 0
         self.update_t_limit = 800
 
         self.input_dim = 1
-        self.input_number = 4
+        self.input_number = 6
 
-        # graphic part
         self.fig = plt.figure(constrained_layout=True)
         self.gs = self.fig.add_gridspec(5, 3)
         self.ax = self.fig.add_subplot(self.gs[:-2, :])
@@ -351,16 +348,16 @@ class A3Cagent(threading.Thread):
 
     def _make_input_window(self):
         power = self.shared_mem_structure['QPROREL']['Val']
-
         upper_condition, stady_condition, low_condition = self._calculator_operation_mode()
 
         input_window_temp = [
-            float('{0:.3f}'.format(power)),
-            float('{0:.3f}'.format((upper_condition - power) * 10)),
-            float('{0:.3f}'.format((power - low_condition) * 10)),
-            float('{0:.3f}'.format(stady_condition)),
+            power,
+            power / 2,
+            (upper_condition - power)*10,
+            (power - low_condition)*10,
+            stady_condition,
+            self.operation_mode/10,
         ]
-
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
         self.input_window_box.append(input_window_temp)
@@ -472,15 +469,11 @@ class A3Cagent(threading.Thread):
         if self.Test_model:
             # 검증 네트워크의 경우 결과를 정확하게 뱉음
             action = np.argmax(policy)
-        elif FINISH_TRAIN:
-            # if train is finish, network will be acted as "np.argmax(policy)"
-            action = np.argmax(policy)
         else:
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
         self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim,
                                                                                           self.input_number])))
-        self.average_max_step += 1      # It will be used to calculate the average_max_prob.
         return policy, action
 
     def _gym_draw_img(self, max_score_ep, current_ep):
@@ -493,8 +486,8 @@ class A3Cagent(threading.Thread):
 
         for __ in range(len(self.interval_log)):
             power.append((self.input_window_log[__][0]*100))
-            high.append((self.input_window_log[__][0] + self.input_window_log[__][1]/10)*100)
-            low.append((self.input_window_log[__][0] - self.input_window_log[__][2]/10)*100)
+            high.append((self.input_window_log[__][0] + self.input_window_log[__][2]/10)*100)
+            low.append((self.input_window_log[__][0] - self.input_window_log[__][3]/10)*100)
             if self.action_log[__] == 0:
                 action.append(0)
             elif self.action_log[__] == 1:
@@ -593,7 +586,6 @@ class A3Cagent(threading.Thread):
 
     # update policy network and value network every episode
     def train_episode(self, done):
-        global FINISH_TRAIN, FINISH_TRAIN_CONDITION
         discounted_rewards = self.discount_rewards(self.rewards, done)
 
         values = self.shared_cric_net.predict(np.array(self.states))
@@ -601,12 +593,9 @@ class A3Cagent(threading.Thread):
 
         advantages = discounted_rewards - values
 
-        if FINISH_TRAIN:
-            self.states, self.actions, self.rewards = [], [], []
-        else:
-            self.optimizer[0]([self.states, self.actions, advantages])
-            self.optimizer[1]([self.states, discounted_rewards])
-            self.states, self.actions, self.rewards = [], [], []
+        self.optimizer[0]([self.states, self.actions, advantages])
+        self.optimizer[1]([self.states, discounted_rewards])
+        self.states, self.actions, self.rewards = [], [], []
     # ------------------------------------------------------------------
     # 기타 편의 용
     # ------------------------------------------------------------------
@@ -631,7 +620,7 @@ class A3Cagent(threading.Thread):
         else:
             global episode
 
-        global Max_score, FINISH_TRAIN, FINISH_TRAIN_CONDITION
+        global Max_score
         self.Max_score = Max_score
 
         logging.debug('[{}] Start socket'.format(self.name))
@@ -743,19 +732,14 @@ class A3Cagent(threading.Thread):
                             else:
                                 pass
 
-                            stats = [self.score, self.avg_q_max/self.average_max_step, self.step]
+                            stats = [self.score, self.avg_q_max/(self.step/4), self.step]
                             for i in range(len(stats)):
                                 self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]:
                                                                                  float(stats[i])})
                             summary_str = self.sess.run(self.summary_op)
                             self.summary_writer.add_summary(summary_str, episode + 1)
 
-                        if FINISH_TRAIN != True:
-                            if (self.avg_q_max/self.average_max_step) >= FINISH_TRAIN_CONDITION:
-                                print("[FINISH]{} Episode:{}".format(episode, self.name))
-                                FINISH_TRAIN = True
-
-                        self.avg_q_max, self.average_max_step, self.score = 0, 0, 0
+                        self.avg_q_max, self.score = 0, 0
                         self.step = 0
                         self.update_t = 0
 
