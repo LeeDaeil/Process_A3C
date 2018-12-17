@@ -30,3 +30,8 @@
 변수 증가
 1. A3C_net_model , __init__ 조건에서 input shape 변경
 2. _make_input_window 에서 변수 추가
+
+### 패치노트
+2018.12.17
+    - LSTM, DNN, CLSTM, CNN 4개 네트워크 업데이트
+    - unit test 에서 각 네트워크의 입력/출력 확인용 작성
