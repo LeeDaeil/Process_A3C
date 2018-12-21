@@ -7,7 +7,7 @@ class test_model(unittest.TestCase):
     def test_DNN_model_shape(self):
         tester = MainModel()
         actor, critic = tester.build_model(net_type='DNN', in_pa=2, ou_pa=3)
-        input_array = np.array([[1, 2], [1, 1]])
+        input_array = np.array([ [1, 1] ])
         print(np.shape(input_array))
         print(actor.predict(input_array))
 
@@ -16,6 +16,7 @@ class test_model(unittest.TestCase):
         actor, critic = tester.build_model(net_type='CNN', in_pa=2, ou_pa=3, time_leg=4)
         input_array = np.array([[[1, 1], [2, 2], [3, 3], [4, 4]]])
         print(np.shape(input_array))
+        print(actor.input_shape[1])
         print(actor.predict(input_array))
 
     def test_LSTM_model_shape(self):
