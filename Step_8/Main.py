@@ -1,6 +1,6 @@
 import tensorflow as tf
 from keras import backend as K
-from keras.layers import Dense, Input
+from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten
 from keras.models import Model
 from keras.optimizers import Adam
 from keras import backend as K
@@ -32,73 +32,98 @@ FINISH_TRAIN_CONDITION = 2.00
 class MainModel:
     def __init__(self):
         self._make_folder()
-        self.worker = []
         self._make_tensorboaed()
-        self.input_para = 4
-        self.output_para = 3
-
-        self.actor, self.critic = self.build_model()
+        self.actor, self.critic = self.build_model(net_type='DNN', in_pa=4, ou_pa=3, time_leg=3)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
-    def _run(self):
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7100 + i,
-                                        CNS_ip='192.168.0.2',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
-        # CNS2
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7200 + i,
-                                        CNS_ip='192.168.0.11',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
-        # CNS3
-        for i in range(0, 20):
-            self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
-                                        Remote_port=7300 + i,
-                                        CNS_ip='192.168.0.13',
-                                        CNS_port=7000 + i,
-                                        Shared_actor_net=self.actor,
-                                        Shared_cric_net=self.critic,
-                                        Optimizer=self.optimizer,
-                                        Sess=self.sess,
-                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                     self.update_ops, self.summary_writer],
-                                        Test_model=False,
-                                        ))
+        self.test = True
 
-        for __ in self.worker:
-           __.start()
-           sleep(1)
-        print("All Agent Start")
-
+    def run(self):
+        worker = self.build_A3C(A3C_test=self.test)
+        for __ in worker:
+            __.start()
+            sleep(1)
+        print('All agent start done')
         while True:
             sleep(60)
             self._save_model()
 
-    def build_model(self):
-        state = Input(batch_shape=(None, self.input_para))
-        shared = Dense(32, input_dim=self.input_para, activation='relu', kernel_initializer='glorot_uniform')(state)
-        # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
+    def build_A3C(self, A3C_test=False):
+        '''
+        A3C의 worker 들을 구축하는 부분
+        :param A3C_test: test하는 중인지
+        :return: 선언된 worker들을 반환함.
+        '''
+        worker = []
+        if A3C_test:
+            for i in range(1, 3):
+                worker.append(A3Cagent(Remote_ip='', Remote_port=7000 + i,
+                                       CNS_ip='192.168.0.55', CNS_port=7000 + i,
+                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
+                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                    self.update_ops, self.summary_writer],
+                                       Test_model=False,
+                                       Net_type = self.net_type))
+        else:
+            for i in range(0, 20):
+                worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7100 + i,
+                                       CNS_ip='192.168.0.2', CNS_port=7000 + i,
+                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
+                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                    self.update_ops, self.summary_writer],
+                                       Test_model=False,
+                                       Net_type=self.net_type))
+            # CNS2
+            for i in range(0, 20):
+                worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7200 + i,
+                                       CNS_ip='192.168.0.11', CNS_port=7000 + i,
+                                       Shared_actor_net=self.actor,
+                                       Shared_cric_net=self.critic,
+                                       Optimizer=self.optimizer,
+                                       Sess=self.sess,
+                                       Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                    self.update_ops, self.summary_writer],
+                                       Test_model=False,
+                                       Net_type=self.net_type))
+            # CNS3
+            for i in range(0, 20):
+                worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7300 + i,
+                                       CNS_ip='192.168.0.13', CNS_port=7000 + i,
+                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
+                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       Summary_ops=[self.summary_op, self.summary_placeholders,
+                                                    self.update_ops, self.summary_writer],
+                                       Test_model=False,
+                                       Net_type=self.net_type))
+        return worker
 
+    def build_model(self, net_type='DNN', in_pa=1, ou_pa=1, time_leg=1):
+        if net_type == 'DNN':
+            state = Input(batch_shape=(None, in_pa))
+            shared = Dense(32, input_dim=in_pa, activation='relu', kernel_initializer='glorot_uniform')(state)
+            # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
+
+        elif net_type == 'CNN' or net_type == 'LSTM' or net_type == 'CLSTM':
+            state = Input(batch_shape=(None, time_leg, in_pa))
+            if net_type == 'CNN':
+                shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
+                shared = MaxPooling1D(pool_size=2)(shared)
+                shared = Flatten()(shared)
+
+            elif net_type == 'LSTM':
+                shared = LSTM(32)(state)
+
+            elif net_type == 'CLSTM':
+                shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
+                shared = MaxPooling1D(pool_size=2)(shared)
+                shared = LSTM(32)(state)
+
+        # ----------------------------------------------------------------------------------------------------
+        # Common output network
         actor_hidden = Dense(16, activation='relu', kernel_initializer='glorot_uniform')(shared)
-        action_prob = Dense(self.output_para, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
+        action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
         value_hidden = Dense(8, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
@@ -106,11 +131,18 @@ class MainModel:
         actor = Model(inputs=state, outputs=action_prob)
         critic = Model(inputs=state, outputs=state_value)
 
+        print('Make {} Network'.format(net_type))
+
         actor._make_predict_function()
         critic._make_predict_function()
 
         actor.summary(print_fn=logging.info)
         critic.summary(print_fn=logging.info)
+
+        self.input_para = in_pa
+        self.output_para = ou_pa
+        self.time_leg = time_leg
+        self.net_type = net_type
 
         return actor, critic
 
@@ -188,12 +220,20 @@ class MainModel:
 
 
 class A3Cagent(threading.Thread):
-    def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Shared_actor_net, Shared_cric_net, Optimizer, Sess, Summary_ops, Test_model):
+    def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Shared_actor_net, Shared_cric_net,
+                 Optimizer, Sess, Summary_ops, Test_model, Net_type):
         threading.Thread.__init__(self)
         self.shared_mem_structure = self._make_shared_mem_structure()
+        # Network initial condition
+        self.shared_actor_net = Shared_actor_net
+        self.shared_cric_net = Shared_cric_net
+        self.net_type = Net_type
+        self.optimizer = Optimizer
+        # initial socket
         self._init_socket(Remote_ip, Remote_port, CNS_ip, CNS_port)
-        self._init_shared_model_setting(Shared_actor_net, Shared_cric_net, Optimizer)
-        self._init_input_window_setting()
+        # initial input window
+        self.input_window_box = self._make_input_window_setting(self.net_type)
+
         self._init_model_information()
         self._init_tensorboard(Sess, Summary_ops)
         self.Test_model = Test_model
@@ -217,25 +257,6 @@ class A3Cagent(threading.Thread):
         logging.debug('[{}] Initial_socket remote {}/{}, cns {}/{}'.format(self.name,
                                                                            self.Remote_ip, self.Remote_port
                                                                            , self.CNS_ip, self.CNS_port))
-
-    def _init_shared_model_setting(self, Shared_actor_net, Shared_cric_net, Optimizer):
-        self.shared_actor_net = Shared_actor_net
-        self.shared_cric_net = Shared_cric_net
-        self.optimizer = Optimizer
-
-    def _init_input_window_setting(self):
-        '''
-        입력 윈도우의 창을 설정하는 부분
-        :return: list형식의 입력 윈도우
-        '''
-        self.input_window_shape = self.shared_cric_net.get_input_shape_at(0)
-
-        if PARA.Model == 'LSTM':
-            # (none, time-length, parameter) -> 중에서 time-length 를 반환
-            self.input_window_box = deque(maxlen=self.shared_cric_net.get_input_shape_at(0)[1])
-        elif PARA.Model == 'DNN':
-            # (none, time-length, parameter) -> 중에서 time-length 를 반환
-            self.input_window_box = deque(maxlen=1)
 
     def _init_model_information(self):
         self.operation_mode = 0.4
@@ -264,6 +285,10 @@ class A3Cagent(threading.Thread):
     def _init_tensorboard(self, Sess, Summary_ops):
         self.sess = Sess
         [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
+
+    # ------------------------------------------------------------------
+    # CNS와 통신
+    # ------------------------------------------------------------------
 
     def _make_shared_mem_structure(self):
         # 초기 shared_mem의 구조를 선언한다.
@@ -326,20 +351,64 @@ class A3Cagent(threading.Thread):
         buffer = UDP_header + pack('h', shape(para)[0]) + temp_data + buffer[len(temp_data):]
 
         self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
+    # ------------------------------------------------------------------
+    # 네트워크용 입력 창 생성 및 관리
+    # ------------------------------------------------------------------
 
+    def _make_input_window(self):
+        # 1. Read data
+        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
+        # 2. Make (para,)
+        input_window_temp = [
+            float('{0:.3f}'.format(power)),
+            float('{0:.3f}'.format((up_cond - power) * 10)),
+            float('{0:.3f}'.format((power - low_cond) * 10)),
+            float('{0:.3f}'.format(std_cond)),
+        ]
+        # ***
+        if len(input_window_temp) != self.input_number:
+            logging.error('[{}] _make_input_window ERROR'.format(self))
+        # 3. Append data -> (
+        self.input_window_box.append(input_window_temp)
+        # logging.debug('[{}] input_window_box_shape:{} / input_window_shape_model:{}'.format(self.name,
+        #                                                                                 np.shape(self.input_window_box),
+        #                                                                                 self.input_window_shape))
+        if self.net_type == 'DNN':
+            out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
+        else:
+            out = np.array([self.input_window_box])  # list를 np.array로 전환 (2, 3) -> (1, 2, 3)
+        return out
+
+    def _make_input_window_setting(self, net_type):
+        '''
+        입력 윈도우의 창을 설정하는 부분
+        :return: list형식의 입력 윈도우
+        '''
+        if net_type == 'DNN':
+            # (none, time-length, parameter) -> 중에서 time-length 를 반환
+            return deque(maxlen=1)
+        else:
+            # (none, time-length, parameter) -> 중에서 time-length 를 반환
+            return deque(maxlen=self.shared_cric_net.input_shape[1])
     # ------------------------------------------------------------------
     # 운전 모드 별 계산
     # ------------------------------------------------------------------
 
     def _calculator_operation_mode(self):
+        '''
+        CNS 시간과 현재 운전 목표를 고려하여 최대, 최소를 구함.
+        '''
+        power = self.shared_mem_structure['QPROREL']['Val']
         tick = self.shared_mem_structure['KCNTOMS']['Val']
-        if self.operation_mode == 0.2:      # 0.5%/min
+        op_mode = self.operation_mode
+
+        if op_mode == 0.2:      # 0.5%/min
             base_condition = tick / 60000
-        elif self.operation_mode == 0.4:    # 1.0%/min
+        elif op_mode == 0.4:    # 1.0%/min
             base_condition = tick / 30000
-        elif self.operation_mode == 0.6:    # 1.5%/min
+        elif op_mode == 0.6:    # 1.5%/min
             base_condition = tick / 20000
-        elif self.operation_mode == 0.8:    # 2.0%/min
+        elif op_mode == 0.8:    # 2.0%/min
             base_condition = tick / 15000
         else:
             print('Error calculator function')
@@ -347,36 +416,11 @@ class A3Cagent(threading.Thread):
         upper_condition = base_condition + 0.03
         stady_condition = base_condition + 0.02
         low_condition = base_condition + 0.01
-        return upper_condition, stady_condition, low_condition
-
-    def _make_input_window(self):
-        power = self.shared_mem_structure['QPROREL']['Val']
-
-        upper_condition, stady_condition, low_condition = self._calculator_operation_mode()
-
-        input_window_temp = [
-            float('{0:.3f}'.format(power)),
-            float('{0:.3f}'.format((upper_condition - power) * 10)),
-            float('{0:.3f}'.format((power - low_condition) * 10)),
-            float('{0:.3f}'.format(stady_condition)),
-        ]
-
-        if len(input_window_temp) != self.input_number:
-            logging.error('[{}] _make_input_window ERROR'.format(self))
-        self.input_window_box.append(input_window_temp)
-
-        # logging.debug('[{}] input_window_box_shape:{} / input_window_shape_model:{}'.format(self.name,
-        #                                                                                 np.shape(self.input_window_box),
-        #                                                                                 self.input_window_shape))
-
-        if PARA.Model == 'LSTM':
-            return np.array([self.input_window_box])  # list를 np.array로 전환 (2,3) -> (1, 2, 3)
-        elif PARA.Model == 'DNN':
-            return np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
-
+        return upper_condition, stady_condition, low_condition, power
     # ------------------------------------------------------------------
     # CNS 원격 제어 관련
     # ------------------------------------------------------------------
+
     def _run_cns(self):
         return self._send_control_signal(['KFZRUN'], [3])
 
@@ -440,14 +484,13 @@ class A3Cagent(threading.Thread):
         return self._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
-        power = self.shared_mem_structure['QPROREL']['Val']
-        upper_condition, stady_condition, low_condition = self._calculator_operation_mode()
+        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 600:
+        if self.step >= 10:
             reward = 0
             done = True
         else:
-            if power >= low_condition and power <= upper_condition:
+            if power >= low_cond and power <= up_cond:
                 reward = 1
                 done = False
             else:
@@ -457,18 +500,22 @@ class A3Cagent(threading.Thread):
         return reward, done
 
     def _gym_append_sample(self, input_window, policy, action, reward):
-        if PARA.Model == 'LSTM':
-            self.states.append(input_window[0]) # (1, 2, 3) -> (2, 3) 잡아서 추출
-        elif PARA.Model == 'DNN':
+        if self.net_type == 'DNN':
+            self.states.append(input_window) # (1, 2, 3) -> (2, 3) 잡아서 추출
+            print(np.shape(self.states))
+        else:
             self.states.append(input_window)  # (1, 2, 3) -> (2, 3) 잡아서 추출
-        act = np.zeros(np.shape(policy)[0])
+            print(np.shape(self.states))
+        act = np.zeros(self.shared_actor_net.output_shape[1])
         act[action] = 1
         self.actions.append(act)
         self.rewards.append(reward)
 
     def _gym_predict_action(self, input_window):
         # policy = self.local_actor_model.predict(input_window)[0]
-        policy = self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim, self.input_number]))[0]
+        # policy = self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim, self.input_number]))[0]
+        predict_result = self.shared_actor_net.predict([input_window])
+        policy = predict_result[0]
         if self.Test_model:
             # 검증 네트워크의 경우 결과를 정확하게 뱉음
             action = np.argmax(policy)
@@ -478,9 +525,9 @@ class A3Cagent(threading.Thread):
         else:
             # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
-        self.avg_q_max += np.amax(self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim,
-                                                                                          self.input_number])))
+        self.avg_q_max += np.amax(predict_result)
         self.average_max_step += 1      # It will be used to calculate the average_max_prob.
+        print(predict_result, policy, action)
         return policy, action
 
     def _gym_draw_img(self, max_score_ep, current_ep):
@@ -489,12 +536,13 @@ class A3Cagent(threading.Thread):
         self.ax2.clear()
         self.ax3.clear()
 
+        print(self.input_window_log)
         power, low, high, action = [], [], [], []
-
         for __ in range(len(self.interval_log)):
             power.append((self.input_window_log[__][0]*100))
             high.append((self.input_window_log[__][0] + self.input_window_log[__][1]/10)*100)
             low.append((self.input_window_log[__][0] - self.input_window_log[__][2]/10)*100)
+
             if self.action_log[__] == 0:
                 action.append(0)
             elif self.action_log[__] == 1:
@@ -536,7 +584,10 @@ class A3Cagent(threading.Thread):
         self.interval_log.append(self.interval)
         self.interval += 1
         self.action_log.append(action)
-        self.input_window_log.append(input_window)
+        if self.net_type == 'DNN':
+            self.input_window_log.append(input_window)
+        else:
+            self.input_window_log.append(input_window[-1])
 
         self.turbin_log['Setpoint'].append(self.shared_mem_structure['KBCDO17']['Val'])
         self.turbin_log['Real'].append(self.shared_mem_structure['KBCDO19']['Val'])
@@ -584,8 +635,8 @@ class A3Cagent(threading.Thread):
         discounted_rewards = np.zeros_like(rewards)
         running_add = 0
         if not done:
-            running_add = self.shared_cric_net.predict(np.reshape(self.states[-1], (self.input_dim,
-                                                                                    self.input_number)))[0]
+            running_add = self.shared_cric_net.predict(np.array([self.states[-1]]))[0]
+            print(self.states[-1], self)
         for t in reversed(range(0, len(rewards))):
             running_add = running_add * 0.99 + rewards[t]
             discounted_rewards[t] = running_add
@@ -635,7 +686,7 @@ class A3Cagent(threading.Thread):
         self.Max_score = Max_score
 
         logging.debug('[{}] Start socket'.format(self.name))
-        self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval= [], [], [], [], 0
+        self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval = [], [], [], [], 0
         self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
         #
         # CNS_10_21.tar 기반의 CNS에서 구동됨.
@@ -649,14 +700,19 @@ class A3Cagent(threading.Thread):
                 if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
                     mode += 1
             elif mode == 1: # LSTM의 데이터를 쌓기 위해서 대기 하는 곳
+                # print('Mode1')
                 if self.shared_mem_structure['KFZRUN']['Val'] == 6:
                     self._run_cns()
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
-                    if np.shape(input_window)[1] == self.input_number:
-                        mode += 1
+                    if self.net_type == 'DNN':
+                        mode += 1 # DNN인 경우 pass
                     else:
-                        self._run_cns()
+                        if np.shape(input_window)[1] == self.shared_cric_net.input_shape[1]:
+                            # CNN, LSTM, C_LSTM에 입력 shape와 동일 할 때까지 대기
+                            mode += 1
+                        else:
+                            self._run_cns()
             elif mode == 2: # 좀 더 대기하는 곳
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     if self.shared_mem_structure['KCNTOMS']['Val'] > 15:
@@ -669,7 +725,7 @@ class A3Cagent(threading.Thread):
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
                     # 2.1 네트워크 액션 예측
-                    policy, action = self._gym_predict_action(input_window[0]) #(4,)
+                    policy, action = self._gym_predict_action(input_window) #(4,)
                     # 2.2. 액션 전송
                     self._gym_send_action(action)
                     self._run_cns()
@@ -767,7 +823,7 @@ class A3Cagent(threading.Thread):
                         if PARA.show_input_windows:
                             logging.debug('[{}] Input_window {}'.format(self.name, input_window))
                         # 2.1 네트워크 액션 예측
-                        policy, action = self._gym_predict_action(input_window[0])  # (4,)
+                        policy, action = self._gym_predict_action(input_window)
                         # 2.2. 액션 전송
                         self._gym_send_action(action)
                         self._run_cns()
@@ -786,10 +842,12 @@ class A3Cagent(threading.Thread):
                     self._run_cns()
                     mode = 0
                 else:
+                    # initial input window
+                    self.input_window_box = self._make_input_window_setting(self.net_type)
                     self._set_init_cns()
     # ------------------------------------------------------------------
 
 
 if __name__ == '__main__':
     test = MainModel()
-    test._run()
+    test.run()
