@@ -2,7 +2,7 @@ import tensorflow as tf
 from keras import backend as K
 from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten
 from keras.models import Model
-from keras.optimizers import Adam
+from keras.optimizers import Adam, RMSprop
 from keras import backend as K
 #------------------------------------------------------------------
 import socket
@@ -33,10 +33,10 @@ class MainModel:
     def __init__(self):
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='DNN', in_pa=4, ou_pa=3, time_leg=3)
+        self.actor, self.critic = self.build_model(net_type='CNN', in_pa=4, ou_pa=3, time_leg=8)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
-        self.test = True
+        self.test = False
 
     def run(self):
         worker = self.build_A3C(A3C_test=self.test)
@@ -64,7 +64,7 @@ class MainModel:
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
                                                     self.update_ops, self.summary_writer],
                                        Test_model=False,
-                                       Net_type = self.net_type))
+                                       Net_type=self.net_type))
         else:
             for i in range(0, 20):
                 worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7100 + i,
@@ -113,12 +113,12 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(32)(state)
+                shared = LSTM(8, activation='relu')(state)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
                 shared = MaxPooling1D(pool_size=2)(shared)
-                shared = LSTM(32)(state)
+                shared = LSTM(8)(state)
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
@@ -160,8 +160,8 @@ class MainModel:
 
         actor_loss = loss + 0.01*entropy
 
-        optimizer = Adam(lr=0.01)
-        # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
+        # optimizer = Adam(lr=0.01)
+        optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
         updates = optimizer.get_updates(self.actor.trainable_weights, [], actor_loss)
         train = K.function([self.actor.input, action, advantages], [], updates=updates)
         return train
@@ -174,8 +174,8 @@ class MainModel:
 
         loss = K.mean(K.square(discounted_reward - value))
 
-        optimizer = Adam(lr=0.01)
-        # optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
+        # optimizer = Adam(lr=0.01)
+        optimizer = RMSprop(lr=2.5e-4, rho=0.99, epsilon=0.01)
         updates = optimizer.get_updates(self.critic.trainable_weights, [], loss)
         train = K.function([self.critic.input, discounted_reward], [], updates=updates)
         return train
@@ -359,11 +359,18 @@ class A3Cagent(threading.Thread):
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
         # 2. Make (para,)
+        # input_window_temp = [
+        #     float('{0:.f}'.format(power)),
+        #     float('{0:.f}'.format((up_cond - power) * 10)),
+        #     float('{0:.f}'.format((power - low_cond) * 10)),
+        #     float('{0:.f}'.format(std_cond)),
+        # ]
         input_window_temp = [
-            float('{0:.3f}'.format(power)),
-            float('{0:.3f}'.format((up_cond - power) * 10)),
-            float('{0:.3f}'.format((power - low_cond) * 10)),
-            float('{0:.3f}'.format(std_cond)),
+            power,
+            # power / 2,
+            (up_cond - power) * 10,
+            (power - low_cond) * 10,
+            std_cond,
         ]
         # ***
         if len(input_window_temp) != self.input_number:
@@ -486,7 +493,7 @@ class A3Cagent(threading.Thread):
     def _gym_reward_done(self):
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 10:
+        if self.step >= 600:
             reward = 0
             done = True
         else:
@@ -502,10 +509,10 @@ class A3Cagent(threading.Thread):
     def _gym_append_sample(self, input_window, policy, action, reward):
         if self.net_type == 'DNN':
             self.states.append(input_window) # (1, 2, 3) -> (2, 3) 잡아서 추출
-            print(np.shape(self.states))
+            # print(np.shape(self.states))
         else:
             self.states.append(input_window)  # (1, 2, 3) -> (2, 3) 잡아서 추출
-            print(np.shape(self.states))
+            # print(np.shape(self.states))
         act = np.zeros(self.shared_actor_net.output_shape[1])
         act[action] = 1
         self.actions.append(act)
@@ -527,7 +534,7 @@ class A3Cagent(threading.Thread):
             action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
         self.avg_q_max += np.amax(predict_result)
         self.average_max_step += 1      # It will be used to calculate the average_max_prob.
-        print(predict_result, policy, action)
+        # print(predict_result, policy, action)
         return policy, action
 
     def _gym_draw_img(self, max_score_ep, current_ep):
@@ -635,8 +642,8 @@ class A3Cagent(threading.Thread):
         discounted_rewards = np.zeros_like(rewards)
         running_add = 0
         if not done:
-            running_add = self.shared_cric_net.predict(np.array([self.states[-1]]))[0]
-            print(self.states[-1], self)
+            #running_add = self.shared_cric_net.predict(np.array([self.states[-1]]))[0]
+            # print(self.states[-1], self)
         for t in reversed(range(0, len(rewards))):
             running_add = running_add * 0.99 + rewards[t]
             discounted_rewards[t] = running_add
