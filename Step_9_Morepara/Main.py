@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_1_LSTM'
+MAKE_FILE_PATH = './VER_6_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -40,7 +40,7 @@ class MainModel:
     def __init__(self):
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
+        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=6, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
         self.test = False
@@ -120,7 +120,7 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(32, activation='relu')(state)
+                shared = LSTM(16, activation='relu')(state)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -218,6 +218,7 @@ class MainModel:
     def _make_folder(self):
         fold_list = ['{}/a3c'.format(MAKE_FILE_PATH),
                      '{}/log'.format(MAKE_FILE_PATH),
+                     '{}/log/each_log'.format(MAKE_FILE_PATH),
                      '{}/model'.format(MAKE_FILE_PATH),
                      '{}/img'.format(MAKE_FILE_PATH)]
         for __ in fold_list:
@@ -272,6 +273,11 @@ class A3Cagent(threading.Thread):
         # ============== 운전 모드 분당 몇% 올릴 것인지 =====
         self.operation_mode = 0.6
         # ===================================================
+        # logger
+        self.logger = logging.getLogger('{}'.format(self.name))
+        self.logger.setLevel(logging.INFO)
+        self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
+        # ===================================================
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
@@ -283,17 +289,15 @@ class A3Cagent(threading.Thread):
         self.update_t_limit = 800
 
         self.input_dim = 1
-        self.input_number = 4
+        self.input_number = 6
 
         # 제어봉 로직에서 출력 로직으로 전환
         self.change_rod_to_auto = False
-        # 트리거
-        self.trg_heter_drain_pump = False
-        self.trg_condensor_2_pump = False
-        self.trg_steam_dump = False
-        self.trg_main_feed_2_pump = False
-        self.trg_main_feed_3_pump = False
-        self.trg_condensor_3_pump = False
+        # 트리거 파트
+        self.triger = {
+            'done_trip_block':0, 'done_turbine_set': 0, 'done_steam_dump':0, 'done_rod_man': 0, 'done_heat_drain':0,
+            'done_mf_2': 0, 'done_con_3':0, 'done_mf_3': 0
+        }
 
         if True:
             # graphic part
@@ -380,13 +384,15 @@ class A3Cagent(threading.Thread):
     def _make_input_window(self):
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
+        Mwe_power = self.shared_mem_structure['KBCDO22']['Val'] / 1000
         # 2. Make (para,)
         input_window_temp = [
             power,
-            # power / 2,
             (up_cond - power) * 10,
             (power - low_cond) * 10,
             std_cond,
+            Mwe_power,
+            power / 2,
         ]
         # ***
         if len(input_window_temp) != self.input_number:
@@ -436,10 +442,10 @@ class A3Cagent(threading.Thread):
         else:
             print('Error calculator function')
 
-        if self.change_rod_to_auto:  # +- 5 % margine
-            upper_condition = base_condition + 0.07
+        if self.triger['done_rod_man'] == 1:  # +- 5 % margine
+            upper_condition = base_condition + 0.05
             stady_condition = base_condition + 0.02
-            low_condition = base_condition - 0.03
+            low_condition = base_condition - 0.01
         else: # +- 1% margine
             upper_condition = base_condition + 0.03
             stady_condition = base_condition + 0.02
@@ -459,103 +465,160 @@ class A3Cagent(threading.Thread):
     # gym
     # ------------------------------------------------------------------
 
+    def _gym_send_logger(self, contents):
+        # contents의 내용과 공통 사항이 포함된 로거를 반환함.
+        if True:
+            power = self.shared_mem_structure['QPROREL']['Val'] * 100
+            el_power = self.shared_mem_structure['KBCDO22']['Val']  # elec power
+            turbine_set = self.shared_mem_structure['KBCDO17']['Val']  # Turbine set point
+            turbine_real = self.shared_mem_structure['KBCDO19']['Val']  # Turbine real point
+
+        step_ = '[{}]:\t'.format(self.step)
+        common_ = '{}[%], {}MWe, Tru[{}/{}]'.format(power, el_power, turbine_set, turbine_real)
+        return self.logger.info(step_ + contents + common_)
+
     def _gym_send_action_append(self, parameter, value):
         for __ in range(len(parameter)):
             self.para.append(parameter[__])
             self.val.append(value[__])
 
     def _gym_send_action(self, action):
-        power = self.shared_mem_structure['QPROREL']['Val']
+        '''
+        :param action: 제어봉 인출 및 삽입 신호 , 터빈 load 제어 신호
+        - 함수의 역할 : 입력된 액션과 현재 제어 상태를 통하여 자동화 신호들을 제작하여 CNS로 송출
+        - 로직
+            1) 메모리로 부터 필요한 발전소 변수 수집
+            2) 수집된 변수로 자동화 로직에 따라서 제어 신호 제작 및 제어 History 작성
+                * history ford : '{}/log/each_log'.format(MAKE_FILE_PATH)
+            3) 제어 신호 전달
+        '''
+        if True:
+            power = self.shared_mem_structure['QPROREL']['Val'] * 100
+            el_power = self.shared_mem_structure['KBCDO22']['Val']  # elec power
+            trip_b = self.shared_mem_structure['KLAMPO22']['Val']   # Trip block condition 0 : Off, 1 : On
+
+            turbine_set = self.shared_mem_structure['KBCDO17']['Val']   # Turbine set point
+            turbine_real = self.shared_mem_structure['KBCDO19']['Val']   # Turbine real point
+            turbine_ac = self.shared_mem_structure['KBCDO18']['Val']     # Turbine ac condition
+
+            load_set = self.shared_mem_structure['KBCDO20']['Val']  # Turbine load set point
+            load_rate = self.shared_mem_structure['KBCDO21']['Val']  # Turbine load rate
+
+        # 전송될 변수와 값 저장하는 리스트
         self.para = []
         self.val = []
-        if self.shared_mem_structure['KLAMPO22']['Val'] == 0 and power >= 0.10:
-            logging.info('[{}] Tripblock ON'.format(self.name))
-            self._gym_send_action_append(['KSWO22', 'KSWO21'], [1, 1])
 
-        # Turbine part
-        if power >= 0.04 and self.shared_mem_structure['KBCDO17']['Val'] < 1750:
-            logging.info('[{}] Turbin UP {}/{}'.format(self.name, self.shared_mem_structure['KBCDO17']['Val'],
-                                                     self.shared_mem_structure['KBCDO19']['Val']))
-            self._gym_send_action_append(['KSWO213'], [1])
+        # History file make
+        if True:
+            # Trip block
+            if trip_b == 0 and power >= 10:
+                if self.triger['done_trip_block'] == 0:
+                    self.logger.info('[{}] :\tTrip block ON'.format(self.step))
+                self.triger['done_trip_block'] = 1
+                self._gym_send_action_append(['KSWO22', 'KSWO21'], [1, 1])
+            # Turbine set-point part
+            if True:
+                if power >= 4 and turbine_set < 1750:
+                    self._gym_send_logger('Turbin UP {}/{}'.format(turbine_set, turbine_real))
+                    self._gym_send_action_append(['KSWO213'], [1])
 
-        if self.shared_mem_structure['KBCDO17']['Val'] >= 1790:
-            logging.info('[{}] Turbin {}/{}'.format(self.name, self.shared_mem_structure['KBCDO17']['Val'],
-                                                        self.shared_mem_structure['KBCDO19']['Val']))
-            self._gym_send_action_append(['KSWO213'], [0])
+                # if power >= 4 and turbine_set >= 1820:
+                #     self.logger.info('[{}] :\tTurbin UP {}/{}'.format(self.step, turbine_set, turbine_real))
+                #     self._gym_send_action_append(['KSWO212', 'KSWO213'], [1, 0])
 
-        if power >= 0.04 and self.shared_mem_structure['KBCDO18']['Val'] < 180:
-            logging.info('[{}] Turbin ac UP {}'.format(self.name, self.shared_mem_structure['KBCDO18']['Val']))
-            self._gym_send_action_append(['KSWO215'], [1])
-        elif self.shared_mem_structure['KBCDO18']['Val'] >= 200:
-            self._gym_send_action_append(['KSWO215'], [0])
+                if power >= 4 and turbine_set >= 1750:
+                    if self.triger['done_turbine_set'] == 0:
+                        self._gym_send_logger('Turbin set point done {}/{}'.format(turbine_set, turbine_real))
+                    self.triger['done_turbine_set'] = 1
+                    self._gym_send_action_append(['KSWO213'], [0])
 
-        # Load set point part
-        if self.change_rod_to_auto:
-            if self.shared_mem_structure['KBCDO20']['Val'] <= 930:
-                self._gym_send_action_append(['KSWO225'], [1])
-            else:
-                self._gym_send_action_append(['KSWO225'], [0])
-
-        # Turbine pump
-        if self.change_rod_to_auto:
-            if not self.trg_steam_dump:
-                logging.info('[{}] Steam Dump Swich Man->Auto'.format(self.name))
-                self._gym_send_action_append(['KSWO176'], [0])
-                self.trg_steam_dump = True
-
-            else:
-                if not self.trg_heter_drain_pump:
-                    logging.info('[{}] Heater Drain Pump On'.format(self.name))
+            # Turbine acclerator up part
+            if True:
+                if power >= 4 and turbine_ac < 180:
+                    self._gym_send_logger('Turbin ac up {}'.format(turbine_ac))
+                    self._gym_send_action_append(['KSWO215'], [1])
+                elif turbine_ac >= 200:
+                    self._gym_send_action_append(['KSWO215'], [0])
+            # Net break part
+            if turbine_real >= 1800 and power >= 15 and el_power < 0:
+                self._gym_send_logger('Net break On')
+                self._gym_send_action_append(['KSWO244'], [1])
+            # Load rate control part
+            if True:
+                if el_power < 0:    # before Net break - set up 100 MWe set-point
+                    if power >= 10:
+                        if load_set < 100:
+                            self._gym_send_logger('Set point up {}'.format(load_set))
+                            self._gym_send_action_append(['KSWO225'], [1])
+                        if load_set >= 100:
+                            self._gym_send_action_append(['KSWO225'], [0])
+                        if load_rate < 25:
+                            self._gym_send_logger('Load rate up {}'.format(load_rate))
+                            self._gym_send_action_append(['KSWO227'], [1])
+                        if load_rate >= 25:
+                            self._gym_send_action_append(['KSWO227'], [0])
+                else: # after Net break
+                    if el_power >= 100:
+                        if self.triger['done_steam_dump'] == 0:
+                            self._gym_send_logger('Steam dump auto')
+                        self._gym_send_action_append(['KSWO176'], [0])
+                        self.triger['done_steam_dump'] = 1
+                        if self.triger['done_rod_man'] == 0:
+                            self._gym_send_logger('Rod control auto')
+                        self._gym_send_action_append(['KSWO28'], [1])
+                        self.triger['done_rod_man'] = 1
+            # Pump part
+            if True:
+                if self.triger['done_rod_man'] == 1:
+                    if self.triger['done_heat_drain'] == 0:
+                        self._gym_send_logger('Heat drain pump on')
                     self._gym_send_action_append(['KSWO205'], [1])
-                    self.trg_heter_drain_pump = True
+                    self.triger['done_heat_drain'] = 1
 
-                else:
-                    if not self.trg_condensor_2_pump:
-                        if power >= 0.20:
-                            logging.info('[{}] Condensor Pump 2 On'.format(self.name))
-                            self._gym_send_action_append(['KSWO205'], [1])
-                            self._gym_send_action_append(['KSWO171', 'KSWO165', 'KSWO159'], [1, 1, 1])
-                            self.trg_condensor_2_pump = True
+                    if el_power >= 200 and self.triger['done_heat_drain'] == 1:
+                        self._gym_send_logger('Condensor Pump 2 On')
+                    self._gym_send_action_append(['KSWO205'], [1])
+                    self._gym_send_action_append(['KSWO171', 'KSWO165', 'KSWO159'], [1, 1, 1])
 
-            if self.trg_condensor_2_pump:
-                if power >= 0.40 and self.trg_main_feed_2_pump == False:
-                    logging.info('[{}] Main Feed Pump 2 On'.format(self.name))
+                    if el_power >= 400 and self.triger['done_mf_2'] == 0:
+                        self._gym_send_logger('Main Feed Pump 2 On')
                     self._gym_send_action_append(['KSWO193'], [1])
-                    self.trg_main_feed_2_pump = True
-                if power >= 0.50 and self.trg_main_feed_2_pump == True and self.trg_condensor_3_pump == False:
-                    logging.info('[{}] Condensor Pump 3 On'.format(self.name))
+                    self.triger['done_mf_2'] = 1
+
+                    if el_power >= 500 and self.triger['done_con_3'] == 0:
+                        self._gym_send_logger('Condensor Pump 3 On')
                     self._gym_send_action_append(['KSWO206'], [1])
-                    self.trg_condensor_3_pump = True
-                if power >= 0.70 and self.trg_condensor_3_pump == True and self.trg_main_feed_3_pump == False:
-                    logging.info('[{}] Main Feed Pump 3 On'.format(self.name))
+                    self.triger['done_con_3'] = 1
+
+                    if el_power >= 800 and self.triger['done_mf_3'] == 0:
+                        self._gym_send_logger('Main Feed Pump 3 On')
                     self._gym_send_action_append(['KSWO192'], [1])
-                    self.trg_main_feed_3_pump = True
-
-        # net break part and  rod_auto_change
-        if self.shared_mem_structure['KBCDO19']['Val'] >= 1800 and power >= 0.15:
-            logging.info('[{}] Net break / change rod'.format(self.name))
-            self._gym_send_action_append(['KSWO244', 'KSWO28'], [1, 1])
-            self.change_rod_to_auto = True
-
-        # control power / Rod and Turbine load
-        if self.change_rod_to_auto:
-            # Turbine control part Load rate control
-            if action == 0: # stay
-                self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 0])
-            elif action == 1: # Up power : load rate up
-                self._gym_send_action_append(['KSWO227', 'KSWO226'], [1, 0])
-            elif action == 2: # Down power : load rate down
-                self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 1])
-        else:
-            # Rod control part
-            if action == 0: # stay
-                self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 0])
-            elif action == 1: # out : increase power
-                self._gym_send_action_append(['KSWO33', 'KSWO32'], [1, 0])
-            elif action == 2: # in : decrease power
-                self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 1])
-
-        return self._send_control_signal(self.para, self.val)
+                    self.triger['done_mf_3'] = 1
+            # control power / Rod and Turbine load
+            if True:
+                if self.triger['done_rod_man'] == 1:
+                    # Turbine control part Load rate control
+                    if action == 0: # stay
+                        self._gym_send_logger('Load stay')
+                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 0])
+                    elif action == 1: # Up power : load rate up
+                        self._gym_send_logger('Load up')
+                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [1, 0])
+                    elif action == 2: # Down power : load rate down
+                        self._gym_send_logger('Load down')
+                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 1])
+                else:
+                    # Rod control part
+                    if action == 0: # stay
+                        self._gym_send_logger('Rod stay')
+                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 0])
+                    elif action == 1: # out : increase power
+                        self._gym_send_logger('Rod out')
+                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [1, 0])
+                    elif action == 2: # in : decrease power
+                        self._gym_send_logger('Rod in')
+                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 1])
+        self._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
@@ -610,7 +673,7 @@ class A3Cagent(threading.Thread):
         self.ax2.clear()
         self.ax3.clear()
 
-        print(self.input_window_log)
+        # print(self.input_window_log)
         power, low, high, action = [], [], [], []
         for __ in range(len(self.interval_log)):
             power.append((self.input_window_log[__][0]*100))
@@ -775,6 +838,7 @@ class A3Cagent(threading.Thread):
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
         while episode < 20000:
+
             self._update_shared_mem()
             if mode == 0:
                 if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
@@ -803,6 +867,9 @@ class A3Cagent(threading.Thread):
                         self._run_cns()
             elif mode == 3: # 초기 액션
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+
+                    self.logger.info('===Start [{}] ep=========================='.format(episode))
+
                     input_window = self._make_input_window()
                     # 2.1 네트워크 액션 예측
                     policy, action = self._gym_predict_action(input_window) #(4,)
@@ -879,10 +946,10 @@ class A3Cagent(threading.Thread):
                                                                                           self.score, self.step))
                             self.start_time = datetime.datetime.now()
 
-                            if self.score >= 600:
-                                self.score = 600
-                            else:
-                                pass
+                            # if self.score >= 600:
+                            #     self.score = 600
+                            # else:
+                            #     pass
 
                             stats = [self.score, self.avg_q_max/self.average_max_step, self.step]
                             for i in range(len(stats)):
