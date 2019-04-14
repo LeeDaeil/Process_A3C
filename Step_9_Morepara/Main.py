@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_6_LSTM'
+MAKE_FILE_PATH = './VER_8_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -540,12 +540,12 @@ class A3Cagent(threading.Thread):
                 elif turbine_ac >= 200:
                     self._gym_send_action_append(['KSWO215'], [0])
             # Net break part
-            if turbine_real >= 1800 and power >= 15 and el_power < 0:
+            if turbine_real >= 1800 and power >= 15:
                 self._gym_send_logger('Net break On')
                 self._gym_send_action_append(['KSWO244'], [1])
             # Load rate control part
             if True:
-                if el_power < 0:    # before Net break - set up 100 MWe set-point
+                if el_power <= 0:    # before Net break - set up 100 MWe set-point
                     if power >= 10:
                         if load_set < 100:
                             self._gym_send_logger('Set point up {}'.format(load_set))
