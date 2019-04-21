@@ -120,8 +120,8 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(125, activation='relu')(state)
-                shared = Dense(64, activation='relu')(shared)
+                shared = LSTM(256, activation='relu')(state)
+                shared = Dense(128, activation='relu')(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -130,10 +130,10 @@ class MainModel:
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
-        actor_hidden = Dense(8, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(64, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(4, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(64, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
