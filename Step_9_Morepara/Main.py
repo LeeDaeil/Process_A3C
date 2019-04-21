@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_8_LSTM'
+MAKE_FILE_PATH = './VER_10_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -120,7 +120,8 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(16, activation='relu')(state)
+                shared = LSTM(125, activation='relu')(state)
+                shared = Dense(64, activation='relu')(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -286,7 +287,7 @@ class A3Cagent(threading.Thread):
         self.average_max_step = 0
 
         self.update_t = 0
-        self.update_t_limit = 800
+        self.update_t_limit = 100
 
         self.input_dim = 1
         self.input_number = 6
@@ -895,8 +896,9 @@ class A3Cagent(threading.Thread):
                     if PARA.save_input_log:
                         logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
 
-                    if self.update_t > self.update_t_limit and done != True:
-                        self.train_episode(self.step != 351)
+                    if self.update_t > self.update_t_limit or done:
+                        print('{} Train'.format(self.name))
+                        self.train_episode(done)
                         self.update_t = 0
                     else:
                         pass
@@ -928,10 +930,10 @@ class A3Cagent(threading.Thread):
 
                         else:
                             episode += 1
-                            self.train_episode(self.step != 1201)
+                            # self.train_episode(self.step != 1201)
                             self._gym_save_control_history()
 
-                            if self.score >= Max_score:
+                            if self.score >= Max_score or self.score >= 300:
                                 self._gym_draw_img(current_ep=episode, max_score_ep=self.score)
                                 Max_score = self.score
                                 self.Max_score = Max_score
