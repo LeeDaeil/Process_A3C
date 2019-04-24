@@ -1,6 +1,6 @@
 import tensorflow as tf
 from keras import backend as K
-from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten
+from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten, Dropout
 from keras.models import Model
 from keras.optimizers import Adam, RMSprop
 from keras import backend as K
@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_10_LSTM'
+MAKE_FILE_PATH = './VER_13_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -121,7 +121,9 @@ class MainModel:
 
             elif net_type == 'LSTM':
                 shared = LSTM(256, activation='relu')(state)
-                shared = Dense(128, activation='relu')(shared)
+                shared = Dense(512, activation='relu')(shared)
+                shared =Dropout(0.2)(shared)
+                shared = Dense(1024, activation='relu')(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -130,10 +132,10 @@ class MainModel:
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
-        actor_hidden = Dense(64, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(512, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(64, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(512, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
