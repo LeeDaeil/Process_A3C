@@ -294,7 +294,7 @@ class A3Cagent(threading.Thread):
         self.average_max_step = 0
 
         self.update_t = 0
-        self.update_t_limit = 100
+        self.update_t_limit = 50
 
         self.input_dim = 1
         self.input_number = 6
@@ -638,8 +638,8 @@ class A3Cagent(threading.Thread):
     def _gym_reward_done(self):
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 1200:
-            reward = 0
+        if self.step >= 450:
+            reward = 2
             done = True
         else:
             if power >= low_cond and power <= up_cond:
@@ -749,29 +749,27 @@ class A3Cagent(threading.Thread):
         self.reward_log.append(reward)
 
     def _gym_save_control_history(self):
-        '''  삭제 '''
-        # if self.Test_model:
-        #     with open('{}/log/Test_control_history_{}_{}.txt'.format(MAKE_FILE_PATH,
-        #                                                              episode_test, self.name), 'a') as f:
-        #         for __ in range(len(self.action_log)):
-        #             f.write('{}, {}, {}, {}, '.format(self.name,
-        #                                               self.interval_log[__],
-        #                                               self.reward_log[__],
-        #                                               self.action_log[__]))
-        #             for _ in self.input_window_log[__]:
-        #                 f.write('{}, '.format(self.input_window_log[__][_]))
-        #             f.write('\n')
-        # else:
-        #     with open('{}/log/Control_history_{}_{}.txt'.format(MAKE_FILE_PATH, episode, self.name), 'a') as f:
-        #         for __ in range(len(self.action_log)):
-        #             f.write('{}, {}, {}, {}, '.format(self.name,
-        #                                               self.interval_log[__],
-        #                                               self.reward_log[__],
-        #                                               self.action_log[__]))
-        #             for _ in self.input_window_log[__]:
-        #                 f.write('{}, '.format(_))
-        #             f.write('\n')
-        pass
+        if self.Test_model:
+            with open('{}/log/Test_control_history_{}_{}.txt'.format(MAKE_FILE_PATH,
+                                                                     episode_test, self.name), 'a') as f:
+                for __ in range(len(self.action_log)):
+                    f.write('{}, {}, {}, {}, '.format(self.name,
+                                                      self.interval_log[__],
+                                                      self.reward_log[__],
+                                                      self.action_log[__]))
+                    for _ in self.input_window_log[__]:
+                        f.write('{}, '.format(self.input_window_log[__][_]))
+                    f.write('\n')
+        else:
+            with open('{}/log/Control_history_{}_{}.txt'.format(MAKE_FILE_PATH, episode, self.name), 'a') as f:
+                for __ in range(len(self.action_log)):
+                    f.write('{}, {}, {}, {}, '.format(self.name,
+                                                      self.interval_log[__],
+                                                      self.reward_log[__],
+                                                      self.action_log[__]))
+                    for _ in self.input_window_log[__]:
+                        f.write('{}, '.format(_))
+                    f.write('\n')
 
     def _gym_save_score_history(self):
         if self.Test_model:
@@ -898,7 +896,7 @@ class A3Cagent(threading.Thread):
                 if self.shared_mem_structure['KFZRUN']['Val'] == 4:
                     # 2.4 t+1초의 상태에 대한 보상 검증
                     reward, done = self._gym_reward_done()
-                    if reward == 100:
+                    if reward == 2:
                         self.score += 1
                     else:
                         self.score += reward
@@ -949,7 +947,7 @@ class A3Cagent(threading.Thread):
                             # self.train_episode(self.step != 1201)
                             self._gym_save_control_history()
 
-                            if self.score >= Max_score or self.score >= 300:
+                            if self.score >= Max_score or self.score >= 400:
                                 self._gym_draw_img(current_ep=episode, max_score_ep=self.score)
                                 Max_score = self.score
                                 self.Max_score = Max_score
@@ -963,11 +961,6 @@ class A3Cagent(threading.Thread):
                                                                                           episode, self.name,
                                                                                           self.score, self.step))
                             self.start_time = datetime.datetime.now()
-
-                            # if self.score >= 600:
-                            #     self.score = 600
-                            # else:
-                            #     pass
 
                             stats = [self.score, self.avg_q_max/self.average_max_step, self.step]
                             for i in range(len(stats)):
