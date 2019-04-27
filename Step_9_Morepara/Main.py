@@ -406,6 +406,8 @@ class A3Cagent(threading.Thread):
             std_cond,
             Mwe_power,
         ]
+        # 2.0 원본 데이터 저장
+        self.input_window_box.append(input_window_temp)
         # 2.1 min_max scalling
         input_window_temp = list(min_max.transform(input_window_temp)[0])   # 동일한 배열로 반환
         # 2.2 input window 로거에 저장
@@ -415,11 +417,6 @@ class A3Cagent(threading.Thread):
         # ***
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
-        # 3. Append data -> (
-        self.input_window_box.append(input_window_temp)
-        # logging.debug('[{}] input_window_box_shape:{} / input_window_shape_model:{}'.format(self.name,
-        #                                                                                 np.shape(self.input_window_box),
-        #                                                                                 self.input_window_shape))
         if self.net_type == 'DNN':
             out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
         else:
