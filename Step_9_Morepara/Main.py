@@ -282,9 +282,10 @@ class A3Cagent(threading.Thread):
         self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
         # ===================================================
         # logger 입력 윈도우 로그
-        self.logger_input = logging.getLogger('{}'.format(self.name))
+        self.logger_input = logging.getLogger('{}_input'.format(self.name))
         self.logger_input.setLevel(logging.INFO)
         self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
+        self.logger_input.info('Ep,Step,Power,High_P,Low_P,Std,Mwe')
         # ===================================================
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
@@ -409,7 +410,7 @@ class A3Cagent(threading.Thread):
         # 2.0 원본 데이터 저장
         self.input_window_box.append(input_window_temp)
         # 2.1 min_max scalling
-        input_window_temp = list(min_max.transform(input_window_temp)[0])   # 동일한 배열로 반환
+        input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
         # 2.2 input window 로거에 저장
         self.logger_input.info('{},{},{},{},{},{},{}'.format(episode, self.step, input_window_temp[0],
                                                              input_window_temp[1], input_window_temp[2],
