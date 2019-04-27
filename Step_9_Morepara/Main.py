@@ -15,11 +15,13 @@ from time import sleep
 from collections import deque
 from Step_9_Morepara.Parameter import PARA
 #------------------------------------------------------------------
+from sklearn import preprocessing
+#------------------------------------------------------------------
 import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_13_LSTM'
+MAKE_FILE_PATH = './VER_2_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -40,7 +42,7 @@ class MainModel:
     def __init__(self):
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=6, ou_pa=3, time_leg=10)
+        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=5, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
         self.test = False
@@ -122,8 +124,6 @@ class MainModel:
             elif net_type == 'LSTM':
                 shared = LSTM(256, activation='relu')(state)
                 shared = Dense(512, activation='relu')(shared)
-                shared =Dropout(0.2)(shared)
-                shared = Dense(1024, activation='relu')(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -281,6 +281,11 @@ class A3Cagent(threading.Thread):
         self.logger.setLevel(logging.INFO)
         self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
         # ===================================================
+        # logger 입력 윈도우 로그
+        self.logger_input = logging.getLogger('{}'.format(self.name))
+        self.logger_input.setLevel(logging.INFO)
+        self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
+        # ===================================================
         self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
@@ -385,6 +390,11 @@ class A3Cagent(threading.Thread):
     # ------------------------------------------------------------------
 
     def _make_input_window(self):
+        # 0. Min_max_scaler
+        min_max = preprocessing.MinMaxScaler()
+        min_data = [0.01, 0, 0, 0, 0]
+        max_data = [0.18, 1, 1, 1, 1]
+        min_max.fit([min_data, max_data])
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
         Mwe_power = self.shared_mem_structure['KBCDO22']['Val'] / 1000
@@ -395,8 +405,13 @@ class A3Cagent(threading.Thread):
             (power - low_cond) * 10,
             std_cond,
             Mwe_power,
-            power / 2,
         ]
+        # 2.1 min_max scalling
+        input_window_temp = list(min_max.transform(input_window_temp)[0])   # 동일한 배열로 반환
+        # 2.2 input window 로거에 저장
+        self.logger_input.info('{},{},{},{},{},{},{}'.format(episode, self.step, input_window_temp[0],
+                                                             input_window_temp[1], input_window_temp[2],
+                                                             input_window_temp[3], input_window_temp[4],))
         # ***
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
@@ -737,27 +752,29 @@ class A3Cagent(threading.Thread):
         self.reward_log.append(reward)
 
     def _gym_save_control_history(self):
-        if self.Test_model:
-            with open('{}/log/Test_control_history_{}_{}.txt'.format(MAKE_FILE_PATH,
-                                                                     episode_test, self.name), 'a') as f:
-                for __ in range(len(self.action_log)):
-                    f.write('{}, {}, {}, {}, '.format(self.name,
-                                                      self.interval_log[__],
-                                                      self.reward_log[__],
-                                                      self.action_log[__]))
-                    for _ in self.input_window_log[__]:
-                        f.write('{}, '.format(self.input_window_log[__][_]))
-                    f.write('\n')
-        else:
-            with open('{}/log/Control_history_{}_{}.txt'.format(MAKE_FILE_PATH, episode, self.name), 'a') as f:
-                for __ in range(len(self.action_log)):
-                    f.write('{}, {}, {}, {}, '.format(self.name,
-                                                      self.interval_log[__],
-                                                      self.reward_log[__],
-                                                      self.action_log[__]))
-                    for _ in self.input_window_log[__]:
-                        f.write('{}, '.format(_))
-                    f.write('\n')
+        '''  삭제 '''
+        # if self.Test_model:
+        #     with open('{}/log/Test_control_history_{}_{}.txt'.format(MAKE_FILE_PATH,
+        #                                                              episode_test, self.name), 'a') as f:
+        #         for __ in range(len(self.action_log)):
+        #             f.write('{}, {}, {}, {}, '.format(self.name,
+        #                                               self.interval_log[__],
+        #                                               self.reward_log[__],
+        #                                               self.action_log[__]))
+        #             for _ in self.input_window_log[__]:
+        #                 f.write('{}, '.format(self.input_window_log[__][_]))
+        #             f.write('\n')
+        # else:
+        #     with open('{}/log/Control_history_{}_{}.txt'.format(MAKE_FILE_PATH, episode, self.name), 'a') as f:
+        #         for __ in range(len(self.action_log)):
+        #             f.write('{}, {}, {}, {}, '.format(self.name,
+        #                                               self.interval_log[__],
+        #                                               self.reward_log[__],
+        #                                               self.action_log[__]))
+        #             for _ in self.input_window_log[__]:
+        #                 f.write('{}, '.format(_))
+        #             f.write('\n')
+        pass
 
     def _gym_save_score_history(self):
         if self.Test_model:
