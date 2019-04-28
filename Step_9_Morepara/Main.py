@@ -237,42 +237,20 @@ class A3Cagent(threading.Thread):
     def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Shared_actor_net, Shared_cric_net,
                  Optimizer, Sess, Summary_ops, Test_model, Net_type):
         threading.Thread.__init__(self)
-        self.shared_mem_structure = self._make_shared_mem_structure()
+        # CNS와 통신과 데이터 교환이 가능한 모듈 호출
+        self.CNS = CNS(self.name, CNS_ip, CNS_port, Remote_ip, Remote_port)
         # Network initial condition
         self.shared_actor_net = Shared_actor_net
         self.shared_cric_net = Shared_cric_net
         self.net_type = Net_type
         self.optimizer = Optimizer
-        # initial socket
-        self._init_socket(Remote_ip, Remote_port, CNS_ip, CNS_port)
         # initial input window
         self.input_window_box = self._make_input_window_setting(self.net_type)
-
-        self._init_model_information()
-        self._init_tensorboard(Sess, Summary_ops)
+        # Tensorboard
+        self.sess = Sess
+        [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
+        # Test mode
         self.Test_model = Test_model
-
-    def _init_socket(self, Remote_ip, Remote_port, CNS_ip, CNS_port):
-        '''
-        :param Remote_ip: 현재 컴퓨터의 ip를 작성하는 곳
-        :param Remote_port: 현재 컴퓨터의 port를 의미
-        :param CNS_ip: CNS의 ip
-        :param CNS_port: CNS의 port
-        :return: UDP 통신을 위한 send, resv 소켓 개방 및 정보 반환
-        '''
-        self.Remote_ip, self.Remote_port = Remote_ip, Remote_port
-        self.CNS_ip, self.CNS_port = CNS_ip, CNS_port
-
-        self.resv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.resv_sock.bind((self.Remote_ip, self.Remote_port))
-
-        self.send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-        logging.info('[{}] Initial_socket remote {}/{}, cns {}/{}'.format(self.name,
-                                                                           self.Remote_ip, self.Remote_port
-                                                                           , self.CNS_ip, self.CNS_port))
-
-    def _init_model_information(self):
         # ============== 운전 모드 분당 몇% 올릴 것인지 =====
         self.operation_mode = 0.6
         # ===================================================
@@ -287,25 +265,18 @@ class A3Cagent(threading.Thread):
         self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
         self.logger_input.info('Ep,Step,Power,High_P,Low_P,Std,Mwe')
         # ===================================================
-        self.avg_q_max = 0
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
-        self.score = 0
-        self.step = 0
-        self.average_max_step = 0
-
-        self.update_t = 0
-        self.update_t_limit = 50
-
-        self.input_dim = 1
-        self.input_number = 6
-
+        self.score, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
+        self.update_t, self.update_t_limit = 0, 50
+        self.input_dim, self.input_number = 1, 6
+        # ===================================================
         # 제어봉 로직에서 출력 로직으로 전환
         self.change_rod_to_auto = False
         # 트리거 파트
         self.triger = {
-            'done_trip_block':0, 'done_turbine_set': 0, 'done_steam_dump':0, 'done_rod_man': 0, 'done_heat_drain':0,
-            'done_mf_2': 0, 'done_con_3':0, 'done_mf_3': 0
+            'done_trip_block': 0, 'done_turbine_set': 0, 'done_steam_dump': 0, 'done_rod_man': 0, 'done_heat_drain': 0,
+            'done_mf_2': 0, 'done_con_3': 0, 'done_mf_3': 0
         }
 
         if True:
@@ -317,75 +288,6 @@ class A3Cagent(threading.Thread):
             self.ax2 = self.fig.add_subplot(self.gs[-2, :])
             self.ax3 = self.fig.add_subplot(self.gs[-1, :])
 
-    def _init_tensorboard(self, Sess, Summary_ops):
-        self.sess = Sess
-        [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
-
-    # ------------------------------------------------------------------
-    # CNS와 통신
-    # ------------------------------------------------------------------
-
-    def _make_shared_mem_structure(self):
-        # 초기 shared_mem의 구조를 선언한다.
-        idx = 0
-        shared_mem = {}
-        with open('./db.txt', 'r') as f:
-            while True:
-                temp_ = f.readline().split('\t')
-                if temp_[0] == '':  # if empty space -> break
-                    break
-                sig = 0 if temp_[1] == 'INTEGER' else 1
-                shared_mem[temp_[0]] = {'Sig': sig, 'Val': 0, 'Num': idx}
-                idx += 1
-        # 다음과정을 통하여 shared_mem 은 PID : { type. val, num }를 가진다.
-        return shared_mem
-
-    def _update_shared_mem(self):
-        '''
-        조작 필요 없음
-        :return:
-        '''
-        # binary data를 받아서 보기 쉽게 만들어서 업데이트
-
-        data, addr = self.resv_sock.recvfrom(4008)
-
-        for i in range(0, 4000, 20):
-            sig = unpack('h', data[24+i: 26+i])[0]
-            para = '12sihh' if sig == 0 else '12sfhh'
-            pid, val, sig, idx = unpack(para, data[8+i:28+i])
-            pid = pid.decode().rstrip('\x00') # remove '\x00'
-            if pid != '':
-                self.shared_mem_structure[pid]['Val'] = val
-
-    def _send_control_signal(self, para, val):
-        '''
-        조작 필요없음
-        :param para:
-        :param val:
-        :return:
-        '''
-        for i in range(shape(para)[0]):
-            self.shared_mem_structure[para[i]]['Val'] = val[i]
-        UDP_header = b'\x00\x00\x00\x10\xa8\x0f'
-        buffer = b'\x00' * 4008
-        temp_data = b''
-
-        # make temp_data to send CNS
-        for i in range(shape(para)[0]):
-            pid_temp = b'\x00' * 12
-            pid_temp = bytes(para[i], 'ascii') + pid_temp[len(para[i]):]  # pid + \x00 ..
-
-            para_sw = '12sihh' if self.shared_mem_structure[para[i]]['Sig'] == 0 else '12sfhh'
-
-            temp_data += pack(para_sw,
-                              pid_temp,
-                              self.shared_mem_structure[para[i]]['Val'],
-                              self.shared_mem_structure[para[i]]['Sig'],
-                              self.shared_mem_structure[para[i]]['Num'])
-
-        buffer = UDP_header + pack('h', shape(para)[0]) + temp_data + buffer[len(temp_data):]
-
-        self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
     # ------------------------------------------------------------------
     # 네트워크용 입력 창 생성 및 관리
     # ------------------------------------------------------------------
@@ -398,7 +300,7 @@ class A3Cagent(threading.Thread):
         min_max.fit([min_data, max_data])
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
-        Mwe_power = self.shared_mem_structure['KBCDO22']['Val'] / 1000
+        Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
         # 2. Make (para,)
         input_window_temp = [
             power,
@@ -443,8 +345,8 @@ class A3Cagent(threading.Thread):
         '''
         CNS 시간과 현재 운전 목표를 고려하여 최대, 최소를 구함.
         '''
-        power = self.shared_mem_structure['QPROREL']['Val']
-        tick = self.shared_mem_structure['KCNTOMS']['Val']
+        power = self.CNS.mem['QPROREL']['Val']
+        tick = self.CNS.mem['KCNTOMS']['Val']
         op_mode = self.operation_mode
 
         if op_mode == 0.2:      # 0.5%/min
@@ -472,10 +374,10 @@ class A3Cagent(threading.Thread):
     # ------------------------------------------------------------------
 
     def _run_cns(self):
-        return self._send_control_signal(['KFZRUN'], [3])
+        return self.CNS._send_control_signal(['KFZRUN'], [3])
 
     def _set_init_cns(self):
-        return self._send_control_signal(['KFZRUN'], [5])
+        return self.CNS._send_control_signal(['KFZRUN'], [5])
 
     # ------------------------------------------------------------------
     # gym
@@ -484,19 +386,21 @@ class A3Cagent(threading.Thread):
     def _gym_send_logger(self, contents):
         # contents의 내용과 공통 사항이 포함된 로거를 반환함.
         if True:
-            power = self.shared_mem_structure['QPROREL']['Val'] * 100
-            el_power = self.shared_mem_structure['KBCDO22']['Val']  # elec power
-            turbine_set = self.shared_mem_structure['KBCDO17']['Val']  # Turbine set point
-            turbine_real = self.shared_mem_structure['KBCDO19']['Val']  # Turbine real point
+            power = self.CNS.mem['QPROREL']['Val'] * 100
+            el_power = self.CNS.mem['KBCDO22']['Val']  # elec power
+            turbine_set = self.CNS.mem['KBCDO17']['Val']  # Turbine set point
+            turbine_real = self.CNS.mem['KBCDO19']['Val']  # Turbine real point
 
         step_ = '[{}]:\t'.format(self.step)
-        common_ = '{}[%], {}MWe, Tru[{}/{}]'.format(power, el_power, turbine_set, turbine_real)
+        common_ = '\t{}[%], {}MWe, Tru[{}/{}]'.format(power, el_power, turbine_set, turbine_real)
         return self.logger.info(step_ + contents + common_)
 
-    def _gym_send_action_append(self, parameter, value):
+    def send_act_log_append(self, parameter, value, log):
         for __ in range(len(parameter)):
             self.para.append(parameter[__])
             self.val.append(value[__])
+        # if log != '':
+            self._gym_send_logger(log)
 
     def _gym_send_action(self, action):
         '''
@@ -509,16 +413,16 @@ class A3Cagent(threading.Thread):
             3) 제어 신호 전달
         '''
         if True:
-            power = self.shared_mem_structure['QPROREL']['Val'] * 100
-            el_power = self.shared_mem_structure['KBCDO22']['Val']  # elec power
-            trip_b = self.shared_mem_structure['KLAMPO22']['Val']   # Trip block condition 0 : Off, 1 : On
+            power = self.CNS.mem['QPROREL']['Val'] * 100
+            el_power = self.CNS.mem['KBCDO22']['Val']  # elec power
+            trip_b = self.CNS.mem['KLAMPO22']['Val']   # Trip block condition 0 : Off, 1 : On
 
-            turbine_set = self.shared_mem_structure['KBCDO17']['Val']   # Turbine set point
-            turbine_real = self.shared_mem_structure['KBCDO19']['Val']   # Turbine real point
-            turbine_ac = self.shared_mem_structure['KBCDO18']['Val']     # Turbine ac condition
+            turbine_set = self.CNS.mem['KBCDO17']['Val']   # Turbine set point
+            turbine_real = self.CNS.mem['KBCDO19']['Val']   # Turbine real point
+            turbine_ac = self.CNS.mem['KBCDO18']['Val']     # Turbine ac condition
 
-            load_set = self.shared_mem_structure['KBCDO20']['Val']  # Turbine load set point
-            load_rate = self.shared_mem_structure['KBCDO21']['Val']  # Turbine load rate
+            load_set = self.CNS.mem['KBCDO20']['Val']  # Turbine load set point
+            load_rate = self.CNS.mem['KBCDO21']['Val']  # Turbine load rate
 
         # 전송될 변수와 값 저장하는 리스트
         self.para = []
@@ -531,110 +435,94 @@ class A3Cagent(threading.Thread):
                 if self.triger['done_trip_block'] == 0:
                     self.logger.info('[{}] :\tTrip block ON'.format(self.step))
                 self.triger['done_trip_block'] = 1
-                self._gym_send_action_append(['KSWO22', 'KSWO21'], [1, 1])
+                self.send_act_log_append(['KSWO22', 'KSWO21'], [1, 1], log='')
             # Turbine set-point part
             if True:
                 if power >= 4 and turbine_set < 1750:
-                    self._gym_send_logger('Turbin UP {}/{}'.format(turbine_set, turbine_real))
-                    self._gym_send_action_append(['KSWO213'], [1])
-
-                # if power >= 4 and turbine_set >= 1820:
-                #     self.logger.info('[{}] :\tTurbin UP {}/{}'.format(self.step, turbine_set, turbine_real))
-                #     self._gym_send_action_append(['KSWO212', 'KSWO213'], [1, 0])
+                    self.send_act_log_append(['KSWO213'], [1], 'Turbin UP {}/{}'.format(turbine_set, turbine_real))
 
                 if power >= 4 and turbine_set >= 1750:
                     if self.triger['done_turbine_set'] == 0:
                         self._gym_send_logger('Turbin set point done {}/{}'.format(turbine_set, turbine_real))
                     self.triger['done_turbine_set'] = 1
-                    self._gym_send_action_append(['KSWO213'], [0])
-
+                    self.send_act_log_append(['KSWO213'], [0], log='')
             # Turbine acclerator up part
             if True:
                 if power >= 4 and turbine_ac < 180:
-                    self._gym_send_logger('Turbin ac up {}'.format(turbine_ac))
-                    self._gym_send_action_append(['KSWO215'], [1])
+                    self.send_act_log_append(['KSWO215'], [1], log='Turbin ac up {}'.format(turbine_ac))
                 elif turbine_ac >= 200:
-                    self._gym_send_action_append(['KSWO215'], [0])
+                    self.send_act_log_append(['KSWO215'], [0], log='')
             # Net break part
             if turbine_real >= 1800 and power >= 15:
-                self._gym_send_logger('Net break On')
-                self._gym_send_action_append(['KSWO244'], [1])
+                self.send_act_log_append(['KSWO244'], [1], 'Net break On')
             # Load rate control part
             if True:
                 if el_power <= 0:    # before Net break - set up 100 MWe set-point
                     if power >= 10:
                         if load_set < 100:
-                            self._gym_send_logger('Set point up {}'.format(load_set))
-                            self._gym_send_action_append(['KSWO225'], [1])
+                            self.send_act_log_append(['KSWO225'], [1], 'Set point up {}'.format(load_set))
                         if load_set >= 100:
-                            self._gym_send_action_append(['KSWO225'], [0])
+                            self.send_act_log_append(['KSWO225'], [0], log='')
                         if load_rate < 25:
-                            self._gym_send_logger('Load rate up {}'.format(load_rate))
-                            self._gym_send_action_append(['KSWO227'], [1])
+                            self.send_act_log_append(['KSWO227'], [1], 'Load rate up {}'.format(load_rate))
                         if load_rate >= 25:
-                            self._gym_send_action_append(['KSWO227'], [0])
+                            self.send_act_log_append(['KSWO227'], [0], log='')
                 else: # after Net break
                     if el_power >= 100:
                         if self.triger['done_steam_dump'] == 0:
                             self._gym_send_logger('Steam dump auto')
-                        self._gym_send_action_append(['KSWO176'], [0])
+                        self.send_act_log_append(['KSWO176'], [0], log='')
                         self.triger['done_steam_dump'] = 1
                         if self.triger['done_rod_man'] == 0:
                             self._gym_send_logger('Rod control auto')
-                        self._gym_send_action_append(['KSWO28'], [1])
+                        self.send_act_log_append(['KSWO28'], [1], log='')
                         self.triger['done_rod_man'] = 1
             # Pump part
             if True:
                 if self.triger['done_rod_man'] == 1:
                     if self.triger['done_heat_drain'] == 0:
                         self._gym_send_logger('Heat drain pump on')
-                    self._gym_send_action_append(['KSWO205'], [1])
+                    self.send_act_log_append(['KSWO205'], [1], log='')
                     self.triger['done_heat_drain'] = 1
 
                     if el_power >= 200 and self.triger['done_heat_drain'] == 1:
                         self._gym_send_logger('Condensor Pump 2 On')
-                    self._gym_send_action_append(['KSWO205'], [1])
-                    self._gym_send_action_append(['KSWO171', 'KSWO165', 'KSWO159'], [1, 1, 1])
+                    self.send_act_log_append(['KSWO205'], [1],log='')
+                    self.send_act_log_append(['KSWO171', 'KSWO165', 'KSWO159'], [1, 1, 1],log='')
 
                     if el_power >= 400 and self.triger['done_mf_2'] == 0:
                         self._gym_send_logger('Main Feed Pump 2 On')
-                    self._gym_send_action_append(['KSWO193'], [1])
+                    self.send_act_log_append(['KSWO193'], [1],log='')
                     self.triger['done_mf_2'] = 1
 
                     if el_power >= 500 and self.triger['done_con_3'] == 0:
                         self._gym_send_logger('Condensor Pump 3 On')
-                    self._gym_send_action_append(['KSWO206'], [1])
+                    self.send_act_log_append(['KSWO206'], [1],log='')
                     self.triger['done_con_3'] = 1
 
                     if el_power >= 800 and self.triger['done_mf_3'] == 0:
                         self._gym_send_logger('Main Feed Pump 3 On')
-                    self._gym_send_action_append(['KSWO192'], [1])
+                    self.send_act_log_append(['KSWO192'], [1],log='')
                     self.triger['done_mf_3'] = 1
             # control power / Rod and Turbine load
             if True:
                 if self.triger['done_rod_man'] == 1:
                     # Turbine control part Load rate control
                     if action == 0: # stay
-                        self._gym_send_logger('Load stay')
-                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 0])
+                        self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 0],log='Load stay')
                     elif action == 1: # Up power : load rate up
-                        self._gym_send_logger('Load up')
-                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [1, 0])
+                        self.send_act_log_append(['KSWO227', 'KSWO226'], [1, 0], log='Load up')
                     elif action == 2: # Down power : load rate down
-                        self._gym_send_logger('Load down')
-                        self._gym_send_action_append(['KSWO227', 'KSWO226'], [0, 1])
+                        self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 1], log='Load down')
                 else:
                     # Rod control part
                     if action == 0: # stay
-                        self._gym_send_logger('Rod stay')
-                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 0])
+                        self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 0], 'Rod stay')
                     elif action == 1: # out : increase power
-                        self._gym_send_logger('Rod out')
-                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [1, 0])
+                        self.send_act_log_append(['KSWO33', 'KSWO32'], [1, 0], 'Rod out')
                     elif action == 2: # in : decrease power
-                        self._gym_send_logger('Rod in')
-                        self._gym_send_action_append(['KSWO33', 'KSWO32'], [0, 1])
-        self._send_control_signal(self.para, self.val)
+                        self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 1], 'Rod in')
+        self.CNS._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
@@ -743,9 +631,9 @@ class A3Cagent(threading.Thread):
         else:
             self.input_window_log.append(input_window[-1])
 
-        self.turbin_log['Setpoint'].append(self.shared_mem_structure['KBCDO17']['Val'])
-        self.turbin_log['Real'].append(self.shared_mem_structure['KBCDO19']['Val'])
-        self.turbin_log['Electric'].append(self.shared_mem_structure['KBCDO22']['Val'])
+        self.turbin_log['Setpoint'].append(self.CNS.mem['KBCDO17']['Val'])
+        self.turbin_log['Real'].append(self.CNS.mem['KBCDO19']['Val'])
+        self.turbin_log['Electric'].append(self.CNS.mem['KBCDO22']['Val'])
 
         self.reward_log.append(reward)
 
@@ -851,15 +739,15 @@ class A3Cagent(threading.Thread):
         self.end_time = datetime.datetime.now()
         while episode < 20000:
 
-            self._update_shared_mem()
+            self.CNS.update_mem()
             if mode == 0:
-                if self.shared_mem_structure['KCNTOMS']['Val'] < 10:
+                if self.CNS.mem['KCNTOMS']['Val'] < 10:
                     mode += 1
             elif mode == 1: # LSTM의 데이터를 쌓기 위해서 대기 하는 곳
                 # print('Mode1')
-                if self.shared_mem_structure['KFZRUN']['Val'] == 6:
+                if self.CNS.mem['KFZRUN']['Val'] == 6:
                     self._run_cns()
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
                     if self.net_type == 'DNN':
                         mode += 1 # DNN인 경우 pass
@@ -870,15 +758,15 @@ class A3Cagent(threading.Thread):
                         else:
                             self._run_cns()
             elif mode == 2: # 좀 더 대기하는 곳
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
-                    if self.shared_mem_structure['KCNTOMS']['Val'] > 15:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
+                    if self.CNS.mem['KCNTOMS']['Val'] > 15:
                         input_window = self._make_input_window()
                         mode += 1
                     else:
                         input_window = self._make_input_window()
                         self._run_cns()
             elif mode == 3: # 초기 액션
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
 
                     self.logger.info('===Start [{}] ep=========================='.format(episode))
 
@@ -890,7 +778,7 @@ class A3Cagent(threading.Thread):
                     self._run_cns()
                     mode += 1
             elif mode == 4:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
                     # 2.4 t+1초의 상태에 대한 보상 검증
                     reward, done = self._gym_reward_done()
                     if reward == 2:
@@ -918,18 +806,20 @@ class A3Cagent(threading.Thread):
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
-                        episode += 1
                         self._gym_save_control_history()
+                        episode += 1
                         # 그래프로 저장하는 부분
                         if self.score >= Max_score or self.score >= 400:
                             self._gym_draw_img(current_ep=episode, max_score_ep=self.score)
                             Max_score = self.score
                             self.Max_score = Max_score
-                        # 로그 파라메터 초기화
+
+                        # 그래프의 로그 파라메터 초기화
                         self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval = [], [], [], [], 0
+                        self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
+
                         # 훈련 결과를 출력 하는 부분
                         self.end_time = datetime.datetime.now()
-                        self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
                         print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
                                                                                       self.end_time,
                                                                                       episode, self.name,
@@ -967,15 +857,15 @@ class A3Cagent(threading.Thread):
                         mode += 1
 
             if mode == 5 or mode == 6 or mode == 7:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
                     input_window = self._add_function_routine(input_window, action)
                     mode += 1
             if mode == 8:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 4:
+                if self.CNS.mem['KFZRUN']['Val'] == 4:
                     input_window = self._add_function_routine(input_window, action)
                     mode -= 4
             if mode == 9:
-                if self.shared_mem_structure['KFZRUN']['Val'] == 6:
+                if self.CNS.mem['KFZRUN']['Val'] == 6:
                     self._run_cns()
                     mode = 0
                 else:
@@ -984,6 +874,84 @@ class A3Cagent(threading.Thread):
                     self._set_init_cns()
     # ------------------------------------------------------------------
 
+
+class CNS:
+    def __init__(self, Thread_name, CNS_IP, CNS_Port, Remote_IP, Remote_Port):
+        if True:
+            # Ip, Port
+            self.Remote_ip, self.Remote_port = Remote_IP, Remote_Port
+            self.CNS_ip, self.CNS_port = CNS_IP, CNS_Port
+            # Read Socket
+            self.resv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.resv_sock.bind((self.Remote_ip, self.Remote_port))
+            # Send Socket
+            self.send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        log = '[{}] Initial_socket remote {}/{}, cns {}/{}'.format(Thread_name, self.Remote_ip, self.Remote_port,
+                                                                   self.CNS_ip, self.CNS_port)
+        logging.info(log)
+
+        if True:
+            # memory
+            self.mem = self.make_mem_structure()
+
+    def make_mem_structure(self):
+        # 초기 shared_mem의 구조를 선언한다.
+        idx = 0
+        shared_mem = {}
+        with open('./db.txt', 'r') as f:
+            while True:
+                temp_ = f.readline().split('\t')
+                if temp_[0] == '':  # if empty space -> break
+                    break
+                sig = 0 if temp_[1] == 'INTEGER' else 1
+                shared_mem[temp_[0]] = {'Sig': sig, 'Val': 0, 'Num': idx}
+                idx += 1
+        # 다음과정을 통하여 shared_mem 은 PID : { type. val, num }를 가진다.
+        return shared_mem
+
+    def update_mem(self):
+        # binary data를 받아서 보기 쉽게 만들어서 업데이트
+
+        data, addr = self.resv_sock.recvfrom(4008)
+
+        for i in range(0, 4000, 20):
+            sig = unpack('h', data[24 + i: 26 + i])[0]
+            para = '12sihh' if sig == 0 else '12sfhh'
+            pid, val, sig, idx = unpack(para, data[8 + i:28 + i])
+            pid = pid.decode().rstrip('\x00')  # remove '\x00'
+            if pid != '':
+                self.mem[pid]['Val'] = val
+
+    def _send_control_signal(self, para, val):
+        '''
+        조작 필요없음
+        :param para:
+        :param val:
+        :return:
+        '''
+        for i in range(shape(para)[0]):
+            self.mem[para[i]]['Val'] = val[i]
+        UDP_header = b'\x00\x00\x00\x10\xa8\x0f'
+        buffer = b'\x00' * 4008
+        temp_data = b''
+
+        # make temp_data to send CNS
+        for i in range(shape(para)[0]):
+            pid_temp = b'\x00' * 12
+            pid_temp = bytes(para[i], 'ascii') + pid_temp[len(para[i]):]  # pid + \x00 ..
+
+            para_sw = '12sihh' if self.mem[para[i]]['Sig'] == 0 else '12sfhh'
+
+            temp_data += pack(para_sw,
+                              pid_temp,
+                              self.mem[para[i]]['Val'],
+                              self.mem[para[i]]['Sig'],
+                              self.mem[para[i]]['Num'])
+
+        buffer = UDP_header + pack('h', shape(para)[0]) + temp_data + buffer[len(temp_data):]
+
+        self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
 
 if __name__ == '__main__':
     test = MainModel()
