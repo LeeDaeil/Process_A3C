@@ -123,7 +123,8 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(8, activation='relu')(state)
+                shared = LSTM(16, activation='relu')(state)
+                shared = Dense(32)(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -132,10 +133,10 @@ class MainModel:
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
-        actor_hidden = Dense(8, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(32, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(4, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(16, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -267,8 +268,8 @@ class A3Cagent(threading.Thread):
         # ===================================================
         self.states, self.actions, self.rewards = [], [], []
         self.action_log, self.reward_log, self.input_window_log = [], [], []
-        self.score, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
-        self.update_t, self.update_t_limit = 0, 50
+        self.total_reward, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
+        self.update_t, self.update_t_limit = 0, 100
         self.input_dim, self.input_number = 1, 4
         # ===================================================
         # 제어봉 로직에서 출력 로직으로 전환
@@ -515,20 +516,26 @@ class A3Cagent(threading.Thread):
         self.CNS._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
+
+        def temp_call(power, up_cond, low_cond, std_cond, done):
+            if power > std_cond:  # std 보다 위쪽에 위치한 경우
+                reward = up_cond - power  # 상위 제한치에서 파위를 빼서 보상을 지급 std에 가까울 수록 보상커짐
+            elif power < std_cond:
+                reward = power - low_cond
+            done, score = False, 1
+            return score, reward, done
+
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 450:
-            reward = 2
+        if self.step >= 500:    # 제한 시간 초과 시
+            done, score, reward = temp_call(power, up_cond, low_cond, std_cond)
             done = True
         else:
-            if power >= low_cond and power <= up_cond:
-                reward = 1
-                done = False
+            if power >= low_cond and power <= up_cond: # 범위 내에서 운전 시 보상 지급
+                done, score, reward = temp_call(power, up_cond, low_cond, std_cond)
             else:
-                reward = 0
-                done = True
-
-        return reward, done
+                done, score, reward = True, 0, 0.0
+        return score, reward, done
 
     def _gym_append_sample(self, input_window, policy, action, reward):
         if self.net_type == 'DNN':
@@ -654,11 +661,11 @@ class A3Cagent(threading.Thread):
         if self.Test_model:
             # 검증 네트워크에서 결과 값을 저장함
             with open('{}/test_history.txt'.format(MAKE_FILE_PATH), 'a') as f:
-                f.writelines('{}/{}/{}\n'.format(episode_test, self.name, self.score))
+                f.writelines('{}/{}/{}\n'.format(episode_test, self.name, self.total_reward))
         else:
             # 훈련 네트워크에서 결과 값을 저장함
             with open('{}/history.txt'.format(MAKE_FILE_PATH), 'a') as f:
-                f.writelines('{}/{}/{}\n'.format(episode, self.name, self.score))
+                f.writelines('{}/{}/{}\n'.format(episode, self.name, self.total_reward))
 
     # ------------------------------------------------------------------
     # 네트워크 훈련 관련
@@ -697,8 +704,8 @@ class A3Cagent(threading.Thread):
     # ------------------------------------------------------------------
 
     def _add_function_routine(self, input_window, action):
-        reward = 1
-        self.score += reward
+        score, reward, done = self._gym_reward_done()
+        self.total_reward += reward
         self.step += 1
         self.update_t += 1
         self._gym_save_control_logger(input_window[0], action, reward)
@@ -770,11 +777,8 @@ class A3Cagent(threading.Thread):
             elif mode == 4:
                 if self.CNS.mem['KFZRUN']['Val'] == 4:
                     # 2.4 t+1초의 상태에 대한 보상 검증
-                    reward, done = self._gym_reward_done()
-                    if reward == 2:
-                        self.score += 1
-                    else:
-                        self.score += reward
+                    score, reward, done = self._gym_reward_done()
+                    self.total_reward += reward
 
                     self.step += 1
                     self.update_t += 1
@@ -799,9 +803,9 @@ class A3Cagent(threading.Thread):
                         self._gym_save_control_history()
                         episode += 1
                         # 그래프로 저장하는 부분
-                        if self.score >= Max_score or self.score >= 400:
-                            self._gym_draw_img(current_ep=episode, max_score_ep=self.score)
-                            Max_score = self.score
+                        if self.step >= Max_score or self.step >= 400:
+                            self._gym_draw_img(current_ep=episode, max_score_ep=self.step)
+                            Max_score = self.step
                             self.Max_score = Max_score
 
                         # 그래프의 로그 파라메터 초기화
@@ -810,15 +814,15 @@ class A3Cagent(threading.Thread):
 
                         # 훈련 결과를 출력 하는 부분
                         self.end_time = datetime.datetime.now()
-                        print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{} Len:{}".format(self.start_time,
-                                                                                             self.end_time,
-                                                                                             episode, self.name,
-                                                                                             self.score,
+                        print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
+                                                                                             self.end_time, self.name,
+                                                                                             episode,
+                                                                                             self.total_reward,
                                                                                              self.step,
-                                                                                             len(self.rewards)))
+                                                                                             ))
                         self.start_time = datetime.datetime.now()
 
-                        stats = [self.score, self.avg_q_max/self.average_max_step, self.step]
+                        stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
                         for i in range(len(stats)):
                             self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]:
                                                                              float(stats[i])})
@@ -830,7 +834,7 @@ class A3Cagent(threading.Thread):
                                 print("[FINISH]{} Episode:{}".format(episode, self.name))
                                 FINISH_TRAIN = True
 
-                        self.avg_q_max, self.average_max_step, self.score = 0, 0, 0
+                        self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
                         self.step = 0
                         self.update_t = 0
 
