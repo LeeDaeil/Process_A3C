@@ -1,6 +1,9 @@
+'''
+훈련된 모델을 가져와서 테스트 하는 모듈
+'''
+
 import tensorflow as tf
-from keras import backend as K
-from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten, Dropout
+from keras.layers import Dense, Input, Conv1D, MaxPooling1D, LSTM, Flatten
 from keras.models import Model
 from keras.optimizers import Adam, RMSprop
 from keras import backend as K
@@ -21,7 +24,8 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_2_LSTM'
+MAKE_FILE_PATH = './VER_2_LSTM_Test'
+MAKE_MAIN_PATH = './VER_2_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -43,6 +47,7 @@ class MainModel:
         self._make_folder()
         self._make_tensorboaed()
         self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=5, ou_pa=3, time_leg=10)
+        self._load_model()
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
         self.test = False
@@ -53,9 +58,6 @@ class MainModel:
             __.start()
             sleep(1)
         print('All agent start done')
-        while True:
-            sleep(60)
-            self._save_model()
 
     def build_A3C(self, A3C_test=False):
         '''
@@ -193,6 +195,11 @@ class MainModel:
     def _save_model(self):
         self.actor.save_weights("{}/Model/A3C_actor.h5".format(MAKE_FILE_PATH))
         self.critic.save_weights("{}/Model/A3C_cric.h5".format(MAKE_FILE_PATH))
+
+    def _load_model(self):
+        print('Load_model')
+        self.actor.load_weights("{}/Model/A3C_actor.h5".format(MAKE_MAIN_PATH))
+        self.critic.load_weights("{}/Model/A3C_cric.h5".format(MAKE_MAIN_PATH))
 
     def _make_tensorboaed(self):
         self.sess = tf.InteractiveSession()
@@ -410,11 +417,11 @@ class A3Cagent(threading.Thread):
         # 2.0 원본 데이터 저장
         self.input_window_box.append(input_window_temp)
         # 2.1 min_max scalling
-        input_window_temp_log = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
+        input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
         # 2.2 input window 로거에 저장
-        self.logger_input.info('{},{},{},{},{},{},{}'.format(episode, self.step, input_window_temp_log[0],
-                                                             input_window_temp_log[1], input_window_temp_log[2],
-                                                             input_window_temp_log[3], input_window_temp_log[4],))
+        self.logger_input.info('{},{},{},{},{},{},{}'.format(episode, self.step, input_window_temp[0],
+                                                             input_window_temp[1], input_window_temp[2],
+                                                             input_window_temp[3], input_window_temp[4],))
         # ***
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
@@ -834,6 +841,7 @@ class A3Cagent(threading.Thread):
     # ------------------------------------------------------------------
     def run(self):
         global episode
+
         global Max_score, FINISH_TRAIN, FINISH_TRAIN_CONDITION
         self.Max_score = Max_score
 
@@ -884,7 +892,7 @@ class A3Cagent(threading.Thread):
 
                     input_window = self._make_input_window()
                     # 2.1 네트워크 액션 예측
-                    policy, action = self._gym_predict_action(input_window)     #(4,)
+                    policy, action = self._gym_predict_action(input_window) #(4,)
                     # 2.2. 액션 전송
                     self._gym_send_action(action)
                     self._run_cns()
@@ -907,27 +915,23 @@ class A3Cagent(threading.Thread):
                     if PARA.save_input_log:
                         logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
 
-                    if self.update_t > self.update_t_limit or done:
-                        print('{} Train'.format(self.name))
-                        self.train_episode(done)
-                        self.update_t = 0
-                    else:
-                        pass
-
                     # 2.5.2 죽으면 정보 호출 및 텐서보드 업데이트
                     if done:
                         # 운전 이력 저장
                         self._gym_save_score_history()
+
+
                         episode += 1
+                        # self.train_episode(self.step != 1201)
                         self._gym_save_control_history()
-                        # 그래프로 저장하는 부분
+
                         if self.score >= Max_score or self.score >= 400:
                             self._gym_draw_img(current_ep=episode, max_score_ep=self.score)
                             Max_score = self.score
                             self.Max_score = Max_score
-                        # 로그 파라메터 초기화
+
                         self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval = [], [], [], [], 0
-                        # 훈련 결과를 출력 하는 부분
+
                         self.end_time = datetime.datetime.now()
                         self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
                         print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
