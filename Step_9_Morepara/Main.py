@@ -21,7 +21,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_2_LSTM'
+MAKE_FILE_PATH = './VER_1_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -42,7 +42,7 @@ class MainModel:
     def __init__(self):
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=5, ou_pa=3, time_leg=10)
+        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
         self.test = False
@@ -66,8 +66,8 @@ class MainModel:
         worker = []
         if A3C_test:
             for i in range(1, 3):
-                worker.append(A3Cagent(Remote_ip='', Remote_port=7000 + i,
-                                       CNS_ip='192.168.0.55', CNS_port=7000 + i,
+                worker.append(A3Cagent(Remote_ip='', Remote_port=7100 + i,
+                                       CNS_ip='192.168.0.2', CNS_port=7000 + i,
                                        Shared_actor_net=self.actor, Shared_cric_net=self.critic,
                                        Optimizer=self.optimizer, Sess=self.sess,
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
@@ -109,6 +109,7 @@ class MainModel:
         return worker
 
     def build_model(self, net_type='DNN', in_pa=1, ou_pa=1, time_leg=1):
+        # 8 16 32 64 128 256 512 1024 2048
         if net_type == 'DNN':
             state = Input(batch_shape=(None, in_pa))
             shared = Dense(32, input_dim=in_pa, activation='relu', kernel_initializer='glorot_uniform')(state)
@@ -122,8 +123,7 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(256, activation='relu')(state)
-                shared = Dense(512, activation='relu')(shared)
+                shared = LSTM(8, activation='relu')(state)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -132,10 +132,10 @@ class MainModel:
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
-        actor_hidden = Dense(512, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(8, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(512, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(4, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -269,7 +269,7 @@ class A3Cagent(threading.Thread):
         self.action_log, self.reward_log, self.input_window_log = [], [], []
         self.score, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
         self.update_t, self.update_t_limit = 0, 50
-        self.input_dim, self.input_number = 1, 6
+        self.input_dim, self.input_number = 1, 4
         # ===================================================
         # 제어봉 로직에서 출력 로직으로 전환
         self.change_rod_to_auto = False
@@ -295,8 +295,8 @@ class A3Cagent(threading.Thread):
     def _make_input_window(self):
         # 0. Min_max_scaler
         min_max = preprocessing.MinMaxScaler()
-        min_data = [0.01, 0, 0, 0, 0]
-        max_data = [0.18, 1, 1, 1, 1]
+        min_data = [0.01, 0, 0, 0] #, 0]
+        max_data = [0.18, 1, 1, 1] #, 1]
         min_max.fit([min_data, max_data])
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
@@ -307,16 +307,15 @@ class A3Cagent(threading.Thread):
             (up_cond - power) * 10,
             (power - low_cond) * 10,
             std_cond,
-            Mwe_power,
+            # Mwe_power,
         ]
-        # 2.0 원본 데이터 저장
-        self.input_window_box.append(input_window_temp)
         # 2.1 min_max scalling
-        input_window_temp_log = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
+        input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
+        self.input_window_box.append(input_window_temp)
         # 2.2 input window 로거에 저장
-        self.logger_input.info('{},{},{},{},{},{},{}'.format(episode, self.step, input_window_temp_log[0],
-                                                             input_window_temp_log[1], input_window_temp_log[2],
-                                                             input_window_temp_log[3], input_window_temp_log[4],))
+        self.logger_input.info('{},{},{},{},{},{}'.format(episode, self.step, input_window_temp[0],
+                                                             input_window_temp[1], input_window_temp[2],
+                                                             input_window_temp[3],))
         # ***
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
@@ -369,15 +368,6 @@ class A3Cagent(threading.Thread):
             stady_condition = base_condition + 0.02
             low_condition = base_condition + 0.01
         return upper_condition, stady_condition, low_condition, power
-    # ------------------------------------------------------------------
-    # CNS 원격 제어 관련
-    # ------------------------------------------------------------------
-
-    def _run_cns(self):
-        return self.CNS._send_control_signal(['KFZRUN'], [3])
-
-    def _set_init_cns(self):
-        return self.CNS._send_control_signal(['KFZRUN'], [5])
 
     # ------------------------------------------------------------------
     # gym
@@ -716,7 +706,7 @@ class A3Cagent(threading.Thread):
         if PARA.show_input_windows:
             logging.debug('[{}] Input_window {}'.format(self.name, input_window))
         self._gym_send_action(action)
-        self._run_cns()
+        self.CNS.run_cns()
         return input_window
 
     # ------------------------------------------------------------------
@@ -731,14 +721,14 @@ class A3Cagent(threading.Thread):
         #
         # CNS_10_21.tar 기반의 CNS에서 구동됨.
         #
-        self._set_init_cns()
+        self.CNS.init_cns()
         sleep(1)
         mode = 0
 
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
+        # 훈련 시작하는 부분
         while episode < 20000:
-
             self.CNS.update_mem()
             if mode == 0:
                 if self.CNS.mem['KCNTOMS']['Val'] < 10:
@@ -746,17 +736,17 @@ class A3Cagent(threading.Thread):
             elif mode == 1: # LSTM의 데이터를 쌓기 위해서 대기 하는 곳
                 # print('Mode1')
                 if self.CNS.mem['KFZRUN']['Val'] == 6:
-                    self._run_cns()
+                    self.CNS.run_cns()
                 if self.CNS.mem['KFZRUN']['Val'] == 4:
                     input_window = self._make_input_window()
                     if self.net_type == 'DNN':
-                        mode += 1 # DNN인 경우 pass
+                        mode += 1   # DNN인 경우 pass
                     else:
                         if np.shape(input_window)[1] == self.shared_cric_net.input_shape[1]:
                             # CNN, LSTM, C_LSTM에 입력 shape와 동일 할 때까지 대기
                             mode += 1
                         else:
-                            self._run_cns()
+                            self.CNS.run_cns()
             elif mode == 2: # 좀 더 대기하는 곳
                 if self.CNS.mem['KFZRUN']['Val'] == 4:
                     if self.CNS.mem['KCNTOMS']['Val'] > 15:
@@ -764,7 +754,7 @@ class A3Cagent(threading.Thread):
                         mode += 1
                     else:
                         input_window = self._make_input_window()
-                        self._run_cns()
+                        self.CNS.run_cns()
             elif mode == 3: # 초기 액션
                 if self.CNS.mem['KFZRUN']['Val'] == 4:
 
@@ -775,7 +765,7 @@ class A3Cagent(threading.Thread):
                     policy, action = self._gym_predict_action(input_window)     #(4,)
                     # 2.2. 액션 전송
                     self._gym_send_action(action)
-                    self._run_cns()
+                    self.CNS.run_cns()
                     mode += 1
             elif mode == 4:
                 if self.CNS.mem['KFZRUN']['Val'] == 4:
@@ -820,10 +810,12 @@ class A3Cagent(threading.Thread):
 
                         # 훈련 결과를 출력 하는 부분
                         self.end_time = datetime.datetime.now()
-                        print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
-                                                                                      self.end_time,
-                                                                                      episode, self.name,
-                                                                                      self.score, self.step))
+                        print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{} Len:{}".format(self.start_time,
+                                                                                             self.end_time,
+                                                                                             episode, self.name,
+                                                                                             self.score,
+                                                                                             self.step,
+                                                                                             len(self.rewards)))
                         self.start_time = datetime.datetime.now()
 
                         stats = [self.score, self.avg_q_max/self.average_max_step, self.step]
@@ -853,7 +845,7 @@ class A3Cagent(threading.Thread):
                         policy, action = self._gym_predict_action(input_window)
                         # 2.2. 액션 전송
                         self._gym_send_action(action)
-                        self._run_cns()
+                        self.CNS.run_cns()
                         mode += 1
 
             if mode == 5 or mode == 6 or mode == 7:
@@ -866,12 +858,12 @@ class A3Cagent(threading.Thread):
                     mode -= 4
             if mode == 9:
                 if self.CNS.mem['KFZRUN']['Val'] == 6:
-                    self._run_cns()
+                    self.CNS.run_cns()
                     mode = 0
                 else:
                     # initial input window
                     self.input_window_box = self._make_input_window_setting(self.net_type)
-                    self._set_init_cns()
+                    self.CNS.init_cns()
     # ------------------------------------------------------------------
 
 
@@ -952,6 +944,12 @@ class CNS:
         buffer = UDP_header + pack('h', shape(para)[0]) + temp_data + buffer[len(temp_data):]
 
         self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
+
+    def run_cns(self):
+        return self._send_control_signal(['KFZRUN'], [3])
+
+    def init_cns(self):
+        return self._send_control_signal(['KFZRUN'], [5])
 
 if __name__ == '__main__':
     test = MainModel()
