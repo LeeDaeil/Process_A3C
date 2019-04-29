@@ -8,6 +8,7 @@ from keras import backend as K
 import socket
 import threading
 import datetime
+import pandas as pd
 from struct import unpack, pack
 from numpy import shape
 import numpy as np
@@ -21,7 +22,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_1_LSTM'
+MAKE_FILE_PATH = './VER_2_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -45,7 +46,7 @@ class MainModel:
         self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
-        self.test = False
+        self.test = True
 
     def run(self):
         worker = self.build_A3C(A3C_test=self.test)
@@ -65,8 +66,8 @@ class MainModel:
         '''
         worker = []
         if A3C_test:
-            for i in range(1, 3):
-                worker.append(A3Cagent(Remote_ip='', Remote_port=7100 + i,
+            for i in range(18, 20):
+                worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7100 + i,
                                        CNS_ip='192.168.0.2', CNS_port=7000 + i,
                                        Shared_actor_net=self.actor, Shared_cric_net=self.critic,
                                        Optimizer=self.optimizer, Sess=self.sess,
@@ -261,13 +262,13 @@ class A3Cagent(threading.Thread):
         self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
         # ===================================================
         # logger 입력 윈도우 로그
-        self.logger_input = logging.getLogger('{}_input'.format(self.name))
-        self.logger_input.setLevel(logging.INFO)
-        self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
-        self.logger_input.info('Ep,Step,Power,High_P,Low_P,Std,Mwe')
+        # self.logger_input = logging.getLogger('{}_input'.format(self.name))
+        # self.logger_input.setLevel(logging.INFO)
+        # self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
+        # self.logger_input.info('Ep,Step,Power,High_P,Low_P,Std,Mwe')
         # ===================================================
         self.states, self.actions, self.rewards = [], [], []
-        self.action_log, self.reward_log, self.input_window_log = [], [], []
+        # self.action_log, self.reward_log, self.input_window_log = [], [], []
         self.total_reward, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
         self.update_t, self.update_t_limit = 0, 100
         self.input_dim, self.input_number = 1, 4
@@ -280,28 +281,24 @@ class A3Cagent(threading.Thread):
             'done_mf_2': 0, 'done_con_3': 0, 'done_mf_3': 0
         }
 
-        if True:
-            # graphic part
-            self.fig = plt.figure(constrained_layout=True)
-            self.gs = self.fig.add_gridspec(5, 3)
-            self.ax = self.fig.add_subplot(self.gs[:-2, :])
-            self.ax_ = self.ax.twinx()
-            self.ax2 = self.fig.add_subplot(self.gs[-2, :])
-            self.ax3 = self.fig.add_subplot(self.gs[-1, :])
-
     # ------------------------------------------------------------------
     # 네트워크용 입력 창 생성 및 관리
     # ------------------------------------------------------------------
 
     def _make_input_window(self):
-        # 0. Min_max_scaler
-        min_max = preprocessing.MinMaxScaler()
-        min_data = [0.01, 0, 0, 0] #, 0]
-        max_data = [0.18, 1, 1, 1] #, 1]
-        min_max.fit([min_data, max_data])
+        if True:
+            # 0. Min_max_scaler
+            # min_max = preprocessing.MinMaxScaler()
+            # min_data = [0.01, 0, 0, 0] #, 0]
+            # max_data = [0.18, 1, 1, 1] #, 1]
+            # min_max.fit([min_data, max_data])
+            pass
         # 1. Read data
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
         Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
+        turbin_set = self.CNS.mem['KBCDO17']['Val']
+        turbin_real = self.CNS.mem['KBCDO19']['Val']
+        turbin_elect = self.CNS.mem['KBCDO22']['Val']
         # 2. Make (para,)
         input_window_temp = [
             power,
@@ -311,20 +308,22 @@ class A3Cagent(threading.Thread):
             # Mwe_power,
         ]
         # 2.1 min_max scalling
-        input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
+        # input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
         self.input_window_box.append(input_window_temp)
-        # 2.2 input window 로거에 저장
-        self.logger_input.info('{},{},{},{},{},{}'.format(episode, self.step, input_window_temp[0],
-                                                             input_window_temp[1], input_window_temp[2],
-                                                             input_window_temp[3],))
-        # ***
+
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
         if self.net_type == 'DNN':
             out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
         else:
             out = np.array([self.input_window_box])  # list를 np.array로 전환 (2, 3) -> (1, 2, 3)
-        return out
+
+        p = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
+             'turbin_elect', 'action']
+        temp_out = out.tolist()
+        for para in [up_cond, low_cond, turbin_set, turbin_real, turbin_elect]:    # 추가
+            temp_out[0][-1].append(para)
+        return out, temp_out
 
     def _make_input_window_setting(self, net_type):
         '''
@@ -517,7 +516,7 @@ class A3Cagent(threading.Thread):
 
     def _gym_reward_done(self):
 
-        def temp_call(power, up_cond, low_cond, std_cond, done):
+        def temp_call(power, up_cond, low_cond, std_cond):
             if power > std_cond:  # std 보다 위쪽에 위치한 경우
                 reward = up_cond - power  # 상위 제한치에서 파위를 빼서 보상을 지급 std에 가까울 수록 보상커짐
             elif power < std_cond:
@@ -528,13 +527,13 @@ class A3Cagent(threading.Thread):
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
         if self.step >= 500:    # 제한 시간 초과 시
-            done, score, reward = temp_call(power, up_cond, low_cond, std_cond)
+            score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
             done = True
         else:
             if power >= low_cond and power <= up_cond: # 범위 내에서 운전 시 보상 지급
-                done, score, reward = temp_call(power, up_cond, low_cond, std_cond)
+                score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
             else:
-                done, score, reward = True, 0, 0.0
+                score, reward, done = 0, 0.0, True
         return score, reward, done
 
     def _gym_append_sample(self, input_window, policy, action, reward):
@@ -568,104 +567,42 @@ class A3Cagent(threading.Thread):
         # print(predict_result, policy, action)
         return policy, action
 
-    def _gym_draw_img(self, max_score_ep, current_ep):
-        self.ax.clear()
-        self.ax_.clear()
-        self.ax2.clear()
-        self.ax3.clear()
+    def draw_img(self, current_ep, data):
+        # ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
+        #              'turbin_elect', 'action']
+        fig = plt.figure()
+        gs = fig.add_gridspec(5, 3)
+        ax = fig.add_subplot(gs[:-2, :])
+        ax_ = ax.twinx()
+        ax2 = fig.add_subplot(gs[-2, :])
+        ax3 = fig.add_subplot(gs[-1, :])
 
-        # print(self.input_window_log)
-        power, low, high, action = [], [], [], []
-        for __ in range(len(self.interval_log)):
-            power.append((self.input_window_log[__][0]*100))
-            high.append((self.input_window_log[__][0] + self.input_window_log[__][1]/10)*100)
-            low.append((self.input_window_log[__][0] - self.input_window_log[__][2]/10)*100)
+        ax.plot(data['power'], 'g')
+        ax.plot(data['low_cond'], 'r')
+        ax.plot(data['up_cond'], 'b')
+        ax_.plot(data['turbin_elect'], 'black')
 
-            if self.action_log[__] == 0:
-                action.append(0)
-            elif self.action_log[__] == 1:
-                action.append(1)
-            elif self.action_log[__] == 2:
-                action.append(-1)
+        ax.set_ylabel('Reactor Power [%]')
+        ax_.set_ylabel('Electrical Power [MWe]')
+        ax.set_ylim(bottom=0)
+        ax_.set_ylim(bottom=0)
+        ax.grid()
 
-        # self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
+        ax2.plot(data['action'])
+        ax2.set_yticks((-1, 0, 1))
+        ax2.set_yticklabels(('In', 'Stay', 'Out'))
+        ax2.set_ylabel('Rod control')
+        ax2.grid()
 
-        self.ax.plot(self.interval_log, power, 'g')
-        self.ax.plot(self.interval_log, low, 'r')
-        self.ax.plot(self.interval_log, high, 'b')
+        ax3.plot(data['turbin_set'], 'r')
+        ax3.plot(data['turbin_real'], 'b')
+        ax3.set_yticks((900, 1800))
+        ax3.grid()
+        ax3.set_yticklabels(('900', '1800'))
+        ax3.set_ylabel('Turbine RPM')
+        ax3.set_xlabel('Time [s]')
 
-        self.ax_.plot(self.interval_log, self.turbin_log['Electric'], 'black')
-
-        self.ax.set_ylabel('Reactor Power [%]')
-        self.ax_.set_ylabel('Electrical Power [MWe]')
-        self.ax.set_ylim(bottom=0)
-        self.ax_.set_ylim(bottom=0)
-        self.ax.grid()
-
-        self.ax2.plot(self.interval_log, action)
-        self.ax2.set_yticks((-1, 0, 1))
-        self.ax2.set_yticklabels(('In', 'Stay', 'Out'))
-        self.ax2.set_ylabel('Rod control')
-        self.ax2.grid()
-
-        self.ax3.plot(self.interval_log, self.turbin_log['Setpoint'], 'r')
-        self.ax3.plot(self.interval_log, self.turbin_log['Real'], 'b')
-        self.ax3.set_yticks((900, 1800))
-        self.ax3.grid()
-        self.ax3.set_yticklabels(('900', '1800'))
-        self.ax3.set_ylabel('Turbine RPM')
-        self.ax3.set_xlabel('Time [s]')
-
-        self.fig.savefig(fname='{}/img/{}_{}_{}.png'.format(MAKE_FILE_PATH, current_ep-1, max_score_ep, self.name),
-                         dpi=600, facecolor=None)
-
-    def _gym_save_control_logger(self, input_window, action, reward):
-        self.interval_log.append(self.interval)
-        self.interval += 1
-        self.action_log.append(action)
-        if self.net_type == 'DNN':
-            self.input_window_log.append(input_window)
-        else:
-            self.input_window_log.append(input_window[-1])
-
-        self.turbin_log['Setpoint'].append(self.CNS.mem['KBCDO17']['Val'])
-        self.turbin_log['Real'].append(self.CNS.mem['KBCDO19']['Val'])
-        self.turbin_log['Electric'].append(self.CNS.mem['KBCDO22']['Val'])
-
-        self.reward_log.append(reward)
-
-    def _gym_save_control_history(self):
-        if self.Test_model:
-            with open('{}/log/Test_control_history_{}_{}.txt'.format(MAKE_FILE_PATH,
-                                                                     episode_test, self.name), 'a') as f:
-                for __ in range(len(self.action_log)):
-                    f.write('{}, {}, {}, {}, '.format(self.name,
-                                                      self.interval_log[__],
-                                                      self.reward_log[__],
-                                                      self.action_log[__]))
-                    for _ in self.input_window_log[__]:
-                        f.write('{}, '.format(self.input_window_log[__][_]))
-                    f.write('\n')
-        else:
-            with open('{}/log/Control_history_{}_{}.txt'.format(MAKE_FILE_PATH, episode, self.name), 'a') as f:
-                for __ in range(len(self.action_log)):
-                    f.write('{}, {}, {}, {}, '.format(self.name,
-                                                      self.interval_log[__],
-                                                      self.reward_log[__],
-                                                      self.action_log[__]))
-                    for _ in self.input_window_log[__]:
-                        f.write('{}, '.format(_))
-                    f.write('\n')
-
-    def _gym_save_score_history(self):
-        if self.Test_model:
-            # 검증 네트워크에서 결과 값을 저장함
-            with open('{}/test_history.txt'.format(MAKE_FILE_PATH), 'a') as f:
-                f.writelines('{}/{}/{}\n'.format(episode_test, self.name, self.total_reward))
-        else:
-            # 훈련 네트워크에서 결과 값을 저장함
-            with open('{}/history.txt'.format(MAKE_FILE_PATH), 'a') as f:
-                f.writelines('{}/{}/{}\n'.format(episode, self.name, self.total_reward))
+        fig.savefig(fname='{}/img/{}_{}.png'.format(MAKE_FILE_PATH, current_ep, self.name), dpi=600, facecolor=None)
 
     # ------------------------------------------------------------------
     # 네트워크 훈련 관련
@@ -699,175 +636,90 @@ class A3Cagent(threading.Thread):
             self.optimizer[0]([self.states, self.actions, advantages])
             self.optimizer[1]([self.states, discounted_rewards])
             self.states, self.actions, self.rewards = [], [], []
-    # ------------------------------------------------------------------
-    # 기타 편의 용
-    # ------------------------------------------------------------------
 
-    def _add_function_routine(self, input_window, action):
-        score, reward, done = self._gym_reward_done()
-        self.total_reward += reward
-        self.step += 1
-        self.update_t += 1
-        self._gym_save_control_logger(input_window[0], action, reward)
-        input_window = self._make_input_window()
-        if PARA.show_input_windows:
-            logging.debug('[{}] Input_window {}'.format(self.name, input_window))
-        self._gym_send_action(action)
-        self.CNS.run_cns()
-        return input_window
-
-    # ------------------------------------------------------------------
+   # ------------------------------------------------------------------
     def run(self):
         global episode
-        global Max_score, FINISH_TRAIN, FINISH_TRAIN_CONDITION
-        self.Max_score = Max_score
+        para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
+                'turbin_elect', 'action']
 
-        logging.debug('[{}] Start socket'.format(self.name))
-        self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval = [], [], [], [], 0
-        self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
-        #
-        # CNS_10_21.tar 기반의 CNS에서 구동됨.
-        #
         self.CNS.init_cns()
-        sleep(1)
-        mode = 0
 
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
         # 훈련 시작하는 부분
         while episode < 20000:
-            self.CNS.update_mem()
-            if mode == 0:
-                if self.CNS.mem['KCNTOMS']['Val'] < 10:
-                    mode += 1
-            elif mode == 1: # LSTM의 데이터를 쌓기 위해서 대기 하는 곳
-                # print('Mode1')
-                if self.CNS.mem['KFZRUN']['Val'] == 6:
-                    self.CNS.run_cns()
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
-                    input_window = self._make_input_window()
-                    if self.net_type == 'DNN':
-                        mode += 1   # DNN인 경우 pass
-                    else:
-                        if np.shape(input_window)[1] == self.shared_cric_net.input_shape[1]:
-                            # CNN, LSTM, C_LSTM에 입력 shape와 동일 할 때까지 대기
-                            mode += 1
-                        else:
-                            self.CNS.run_cns()
-            elif mode == 2: # 좀 더 대기하는 곳
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
-                    if self.CNS.mem['KCNTOMS']['Val'] > 15:
-                        input_window = self._make_input_window()
-                        mode += 1
-                    else:
-                        input_window = self._make_input_window()
-                        self.CNS.run_cns()
-            elif mode == 3: # 초기 액션
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
+            current_ep = episode
+            self.logger.info('===Start [{}] ep=========================='.format(current_ep))
 
-                    self.logger.info('===Start [{}] ep=========================='.format(episode))
+            input_window_db = pd.DataFrame([], columns=para)
+            for i in range(0, 10):
+                self.CNS.run_freeze_CNS()
 
-                    input_window = self._make_input_window()
-                    # 2.1 네트워크 액션 예측
-                    policy, action = self._gym_predict_action(input_window)     #(4,)
-                    # 2.2. 액션 전송
-                    self._gym_send_action(action)
-                    self.CNS.run_cns()
-                    mode += 1
-            elif mode == 4:
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
-                    # 2.4 t+1초의 상태에 대한 보상 검증
-                    score, reward, done = self._gym_reward_done()
-                    self.total_reward += reward
+                input_window, list_input_window = self._make_input_window()    # (1, 1, 4)
 
-                    self.step += 1
-                    self.update_t += 1
+                list_input_window[0][-1].append(0) # 0 stay, 1: rod out, 2: rod in
+                input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
-                    # 2.5 data box 에 append
-                    self._gym_append_sample(input_window[0], policy, action, reward)
-                    self._gym_save_control_logger(input_window[0], action, reward)
-                    if PARA.save_input_log:
-                        logging.debug('[{}] input window\n{}'.format(self.name, input_window[0]))
+            self.CNS.run_freeze_CNS()
+            input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # old state
 
-                    if self.update_t > self.update_t_limit or done:
-                        print('{} Train'.format(self.name))
-                        self.train_episode(done)
-                        self.update_t = 0
-                    else:
-                        pass
+            while True:
+                # 오래된 상태에 대한 액션 계산
+                policy, action = self._gym_predict_action(input_window)  # (4,)
+                list_input_window[0][-1].append(action)  # 0 stay, 1: rod out, 2: rod in
+                input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
-                    # 2.5.2 죽으면 정보 호출 및 텐서보드 업데이트
-                    if done:
-                        # 운전 이력 저장
-                        self._gym_save_score_history()
-                        self._gym_save_control_history()
-                        episode += 1
-                        # 그래프로 저장하는 부분
-                        if self.step >= Max_score or self.step >= 400:
-                            self._gym_draw_img(current_ep=episode, max_score_ep=self.step)
-                            Max_score = self.step
-                            self.Max_score = Max_score
+                # 계산된 액션을 CNS에 전송
+                self._gym_send_action(action)
 
-                        # 그래프의 로그 파라메터 초기화
-                        self.action_log, self.reward_log, self.input_window_log, self.interval_log, self.interval = [], [], [], [], 0
-                        self.turbin_log = {'Setpoint': [], 'Real': [], 'Electric': []}
+                # 액션을 수행하고 현재 상태 계산
+                self.CNS.run_freeze_CNS()
+                input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # new state
+                self.logger.info('===Ssnfs [{}] ep=========================='.format(current_ep))
+                # new state에 대한 보상 계산
+                score, reward, done = self._gym_reward_done()
+                self._gym_append_sample(input_window[0], policy, action, reward)
+                self.total_reward += reward
+                self.step += 1
+                self.update_t += 1
 
-                        # 훈련 결과를 출력 하는 부분
-                        self.end_time = datetime.datetime.now()
-                        print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
-                                                                                             self.end_time, self.name,
-                                                                                             episode,
-                                                                                             self.total_reward,
-                                                                                             self.step,
-                                                                                             ))
-                        self.start_time = datetime.datetime.now()
+                # 게임의 종료 여부 확인
+                if done or self.update_t > self.update_t_limit:
+                    print('{} Train'.format(self.name))
+                    self.train_episode(done)
+                    self.update_t = 0
+                if done:
+                    self.end_time = datetime.datetime.now()
+                    print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
+                                                                                  self.end_time, self.name,
+                                                                                  episode,
+                                                                                  self.total_reward,
+                                                                                  self.step,
+                                                                                  ))
+                    self.start_time = datetime.datetime.now()
 
-                        stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
-                        for i in range(len(stats)):
-                            self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]:
-                                                                             float(stats[i])})
-                        summary_str = self.sess.run(self.summary_op)
-                        self.summary_writer.add_summary(summary_str, episode + 1)
+                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
+                    for i in range(len(stats)):
+                        self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
+                    summary_str = self.sess.run(self.summary_op)
+                    self.summary_writer.add_summary(summary_str, current_ep)
 
-                        if FINISH_TRAIN != True:
-                            if (self.avg_q_max/self.average_max_step) >= FINISH_TRAIN_CONDITION:
-                                print("[FINISH]{} Episode:{}".format(episode, self.name))
-                                FINISH_TRAIN = True
+                    # 훈련 데이터 저장
+                    input_window_db.to_csv('{}/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, current_ep))
 
-                        self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
-                        self.step = 0
-                        self.update_t = 0
+                    # 훈련 데이터를 통한 그래프 그리기
+                    self.draw_img(current_ep=current_ep, data=input_window_db)
 
-                        mode += 5
-                        done = False
-                    else:
-                        # 2.6 액션의 결과를 토대로 다시 업데이트
-                        input_window = self._make_input_window()
-                        if PARA.show_input_windows:
-                            logging.debug('[{}] Input_window {}'.format(self.name, input_window))
-                        # 2.1 네트워크 액션 예측
-                        policy, action = self._gym_predict_action(input_window)
-                        # 2.2. 액션 전송
-                        self._gym_send_action(action)
-                        self.CNS.run_cns()
-                        mode += 1
+                    # 에피소드 넘버 추가
+                    episode += 1
 
-            if mode == 5 or mode == 6 or mode == 7:
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
-                    input_window = self._add_function_routine(input_window, action)
-                    mode += 1
-            if mode == 8:
-                if self.CNS.mem['KFZRUN']['Val'] == 4:
-                    input_window = self._add_function_routine(input_window, action)
-                    mode -= 4
-            if mode == 9:
-                if self.CNS.mem['KFZRUN']['Val'] == 6:
-                    self.CNS.run_cns()
-                    mode = 0
-                else:
-                    # initial input window
-                    self.input_window_box = self._make_input_window_setting(self.net_type)
-                    self.CNS.init_cns()
+                    self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
+                    self.step = 0
+                    self.update_t = 0
+                    break
+            self.CNS.init_cns()
+            sleep(1)
     # ------------------------------------------------------------------
 
 
@@ -953,7 +805,37 @@ class CNS:
         return self._send_control_signal(['KFZRUN'], [3])
 
     def init_cns(self):
-        return self._send_control_signal(['KFZRUN'], [5])
+        # UDP 통신에 쌇인 데이터를 새롭게 하는 기능
+        self.update_mem()
+        sleep(0.5)
+        self.update_mem()
+        sleep(0.5)
+        self._send_control_signal(['KFZRUN'], [5])
+        sleep(2)
+        return 0
+
+    def run_freeze_CNS(self):
+        while True:
+            self.update_mem()
+            if self.mem['KFZRUN']['Val'] == 6:
+                # initial 상태가 완료되면 6으로 되고, 1회 run 수행
+                self.run_cns()
+                # print('Run_cns')
+            elif self.mem['KFZRUN']['Val'] == 4:
+                # 1회 run 수행이 완료된 상태면 CNS run하고 break
+                self.run_cns()
+                break
+            else:
+                # initial 상태로 요청에 대한 완료가 아직 끝나지 않거나
+                # 1회 run 수행이 완료가 되지 않은 상태
+                pass
+            sleep(1)
+
+
+        # if self.mem['KFZRUN']['Val'] == 4:
+        #     print('Hear')
+        #     pass
+
 
 if __name__ == '__main__':
     test = MainModel()
