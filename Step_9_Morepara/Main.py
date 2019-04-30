@@ -46,7 +46,7 @@ class MainModel:
         self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
-        self.test = True
+        self.test = False
 
     def run(self):
         worker = self.build_A3C(A3C_test=self.test)
@@ -247,7 +247,7 @@ class A3Cagent(threading.Thread):
         self.net_type = Net_type
         self.optimizer = Optimizer
         # initial input window
-        self.input_window_box = self._make_input_window_setting(self.net_type)
+        self.input_window_box = deque(maxlen=self.shared_cric_net.input_shape[1])
         # Tensorboard
         self.sess = Sess
         [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
@@ -325,17 +325,6 @@ class A3Cagent(threading.Thread):
             temp_out[0][-1].append(para)
         return out, temp_out
 
-    def _make_input_window_setting(self, net_type):
-        '''
-        입력 윈도우의 창을 설정하는 부분
-        :return: list형식의 입력 윈도우
-        '''
-        if net_type == 'DNN':
-            # (none, time-length, parameter) -> 중에서 time-length 를 반환
-            return deque(maxlen=1)
-        else:
-            # (none, time-length, parameter) -> 중에서 time-length 를 반환
-            return deque(maxlen=self.shared_cric_net.input_shape[1])
     # ------------------------------------------------------------------
     # 운전 모드 별 계산
     # ------------------------------------------------------------------
@@ -570,7 +559,7 @@ class A3Cagent(threading.Thread):
     def draw_img(self, current_ep, data):
         # ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
         #              'turbin_elect', 'action']
-        fig = plt.figure()
+        fig = plt.figure(constrained_layout=True)
         gs = fig.add_gridspec(5, 3)
         ax = fig.add_subplot(gs[:-2, :])
         ax_ = ax.twinx()
@@ -636,6 +625,32 @@ class A3Cagent(threading.Thread):
             self.optimizer[0]([self.states, self.actions, advantages])
             self.optimizer[1]([self.states, discounted_rewards])
             self.states, self.actions, self.rewards = [], [], []
+    def add_data(self, real=True, train=False):
+        # current state 생성
+        if True:
+            if True:
+                # 0. Min_max_scaler
+                # min_max = preprocessing.MinMaxScaler()
+                # min_data = [0.01, 0, 0, 0] #, 0]
+                # max_data = [0.18, 1, 1, 1] #, 1]
+                # min_max.fit([min_data, max_data])
+                pass
+            # 1. Read data
+            up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
+            Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
+            turbin_set = self.CNS.mem['KBCDO17']['Val']
+            turbin_real = self.CNS.mem['KBCDO19']['Val']
+            turbin_elect = self.CNS.mem['KBCDO22']['Val']
+
+            # 2. Make (para,)
+            input_window_temp = [
+                power,
+                (up_cond - power) * 10,
+                (power - low_cond) * 10,
+                std_cond,
+                # Mwe_power,
+            ]
+        # real_db에 저장
 
    # ------------------------------------------------------------------
     def run(self):
@@ -676,7 +691,7 @@ class A3Cagent(threading.Thread):
                 # 액션을 수행하고 현재 상태 계산
                 self.CNS.run_freeze_CNS()
                 input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # new state
-                self.logger.info('===Ssnfs [{}] ep=========================='.format(current_ep))
+
                 # new state에 대한 보상 계산
                 score, reward, done = self._gym_reward_done()
                 self._gym_append_sample(input_window[0], policy, action, reward)
