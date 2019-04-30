@@ -22,7 +22,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_3_LSTM'
+MAKE_FILE_PATH = './VER_4_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -58,6 +58,9 @@ class MainModel:
         print('All agent start done')
         while True:
             sleep(60)
+            # 살아 있는지 보여줌
+            workers_step = [worker[i].step for i in range(len(worker))]
+            print('[{}]\t[max:{}][{}]'.format(datetime.datetime.now(), max(workers_step), workers_step))
             self._save_model()
 
     def build_A3C(self, A3C_test=False):
@@ -702,7 +705,7 @@ class A3Cagent(threading.Thread):
                 score, reward, done = self._gym_reward_done()
                 self._gym_append_sample(input_window[0], policy, action, reward)
                 self.total_reward += reward
-                self.step += 1
+                self.step += iter_cns
                 self.update_t += 1
 
                 # 게임의 종료 여부 확인
@@ -711,26 +714,27 @@ class A3Cagent(threading.Thread):
                     self.train_episode(done)
                     self.update_t = 0
                 if done:
+                    episode += 1
                     self.end_time = datetime.datetime.now()
                     print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
                                                                                   self.end_time, self.name,
                                                                                   episode,
                                                                                   self.total_reward,
-                                                                                  self.step * iter_cns,
+                                                                                  self.step,
                                                                                   ))
                     self.start_time = datetime.datetime.now()
 
-                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step * iter_cns]
+                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
                     for i in range(len(stats)):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
-                    self.summary_writer.add_summary(summary_str, episode + 1)
+                    self.summary_writer.add_summary(summary_str, episode)
 
                     # 훈련 데이터 저장
                     input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, episode))
 
                     # 훈련 데이터를 통한 그래프 그리기
-                    if self.step * iter_cns > 300:
+                    if self.step > 300:
                         self.draw_img(current_ep=episode, data=self.Buffer.grp_db, path='2')
 
                     self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
