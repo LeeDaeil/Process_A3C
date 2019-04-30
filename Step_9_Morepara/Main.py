@@ -38,7 +38,7 @@ episode_test = 0
 Max_score = 0       # if A3C model get Max_score, A3C model will draw the Max_score grape
 FINISH_TRAIN = False
 FINISH_TRAIN_CONDITION = 2.00
-TEST_NETWORK = True
+TEST_NETWORK = False
 
 class MainModel:
     def __init__(self):
@@ -211,8 +211,8 @@ class MainModel:
         episode_avg_max_q = tf.Variable(0.)
         episode_duration = tf.Variable(0.)
 
-        tf.summary.scalar('Total Reward/Episode', episode_total_reward)
-        tf.summary.scalar('Average Max Prob/Episode', episode_avg_max_q)
+        tf.summary.scalar('Total_Reward/Episode', episode_total_reward)
+        tf.summary.scalar('Average_Max Prob/Episode', episode_avg_max_q)
         tf.summary.scalar('Duration/Episode', episode_duration)
 
         summary_vars = [episode_total_reward, episode_avg_max_q, episode_duration]
@@ -286,6 +286,25 @@ class A3Cagent(threading.Thread):
     # ------------------------------------------------------------------
     # 네트워크용 입력 창 생성 및 관리
     # ------------------------------------------------------------------
+
+    def input_data(self, action):
+        # 1. Read data
+        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
+        Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
+        turbin_set = self.CNS.mem['KBCDO17']['Val']
+        turbin_real = self.CNS.mem['KBCDO19']['Val']
+        turbin_elect = self.CNS.mem['KBCDO22']['Val']
+        # 2. Make (para,)
+        input_window_temp = [
+            power,
+            (up_cond - power) * 10,
+            (power - low_cond) * 10,
+            std_cond,
+            # Mwe_power,
+        ]
+        for para in [up_cond, low_cond, turbin_set, turbin_real, turbin_elect, action]:    # 추가
+            input_window_temp.append(para)
+        return input_window_temp
 
     def _make_input_window(self):
         if True:
@@ -558,7 +577,7 @@ class A3Cagent(threading.Thread):
         # print(predict_result, policy, action)
         return policy, action
 
-    def draw_img(self, current_ep, data):
+    def draw_img(self, current_ep, data, path):
         # ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
         #              'turbin_elect', 'action']
         fig = plt.figure(constrained_layout=True)
@@ -593,7 +612,7 @@ class A3Cagent(threading.Thread):
         ax3.set_ylabel('Turbine RPM')
         ax3.set_xlabel('Time [s]')
 
-        fig.savefig(fname='{}/img/{}_{}.png'.format(MAKE_FILE_PATH, current_ep, self.name), dpi=600, facecolor=None)
+        fig.savefig(fname='{}/img/{}_{}_{}.png'.format(MAKE_FILE_PATH, path, current_ep, self.name), dpi=600, facecolor=None)
 
     # ------------------------------------------------------------------
     # 네트워크 훈련 관련
@@ -628,72 +647,55 @@ class A3Cagent(threading.Thread):
             self.optimizer[1]([self.states, discounted_rewards])
             self.states, self.actions, self.rewards = [], [], []
 
-    def add_data(self, real=True, train=False):
-        # current state 생성
-        if True:
-            if True:
-                # 0. Min_max_scaler
-                # min_max = preprocessing.MinMaxScaler()
-                # min_data = [0.01, 0, 0, 0] #, 0]
-                # max_data = [0.18, 1, 1, 1] #, 1]
-                # min_max.fit([min_data, max_data])
-                pass
-            # 1. Read data
-            up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
-            Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
-            turbin_set = self.CNS.mem['KBCDO17']['Val']
-            turbin_real = self.CNS.mem['KBCDO19']['Val']
-            turbin_elect = self.CNS.mem['KBCDO22']['Val']
-
-            # 2. Make (para,)
-            input_window_temp = [
-                power,
-                (up_cond - power) * 10,
-                (power - low_cond) * 10,
-                std_cond,
-                # Mwe_power,
-            ]
-        # real_db에 저장
-
+    def run_cns(self, i, action):
+        for _ in range(i):
+            self.CNS.run_freeze_CNS()
+            if _ == 0:
+                self.Buffer.add_data(self.input_data(action=action))
+            else:
+                self.Buffer.add_data(self.input_data(action=0))
    # ------------------------------------------------------------------
     def run(self):
         global episode
-
+        para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set',
+                'turbin_real', 'turbin_elect', 'action']
         self.CNS.init_cns()
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
+        self.Buffer = Buffer(para=para)     # 그래프용 데이터를 모으는 부분
+        iter_cns = 2    # 반복
+
         # 훈련 시작하는 부분
         while episode < 20000:
             # 1. 에피 소드 시작
-            episode += 1            # 동시 다발적으로 발생하기 때문에 초기에 에피소드를 로드하고 +1을 함
-            current_ep = episode    # 현재 에피소드의 넘버를 저장
-            para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set',
-                    'turbin_real', 'turbin_elect', 'action']
             input_window_db = pd.DataFrame([], columns=para)
-            self.logger.info('===Start [{}] ep=========================='.format(current_ep))
+            self.Buffer.Buffer_refresh()    # 버퍼 초기화
+            for _ in range(3):
+                self.CNS.update_mem()   # 메모리 refresh
+            self.logger.info('===Start [{}] ep=========================='.format(episode))
             # 2. LSTM 10 step 만큼 진행
             for i in range(0, 10):
-                self.CNS.run_freeze_CNS()
+                self.run_cns(iter_cns, action=0)
 
                 input_window, list_input_window = self._make_input_window()    # (1, 1, 4)
 
                 list_input_window[0][-1].append(0) # 0 stay, 1: rod out, 2: rod in
                 input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
-            self.CNS.run_freeze_CNS()
-            input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # old state
-
+            self.run_cns(iter_cns, action=0)
+            input_window, list_input_window = self._make_input_window()  # (1, 1, 4)
             while True:
                 # 오래된 상태에 대한 액션 계산
                 policy, action = self._gym_predict_action(input_window)  # (1, 1, 4)
-                list_input_window[0][-1].append(action)  # 0 stay, 1: rod out, 2: rod in
+                a = -1 if action == 2 else action
+                list_input_window[0][-1].append(a)  # 0 stay, 1: rod out, 2: rod in
                 input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
                 # 계산된 액션을 CNS에 전송
                 self._gym_send_action(action)
 
                 # 액션을 수행하고 현재 상태 계산
-                self.CNS.run_freeze_CNS()
+                self.run_cns(iter_cns, action=a)
                 input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # new state
 
                 # new state에 대한 보상 계산
@@ -714,32 +716,40 @@ class A3Cagent(threading.Thread):
                                                                                   self.end_time, self.name,
                                                                                   episode,
                                                                                   self.total_reward,
-                                                                                  self.step,
+                                                                                  self.step * iter_cns,
                                                                                   ))
                     self.start_time = datetime.datetime.now()
 
-                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
+                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step * iter_cns]
                     for i in range(len(stats)):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
                     self.summary_writer.add_summary(summary_str, episode + 1)
 
                     # 훈련 데이터 저장
-                    input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, current_ep))
+                    input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, episode))
 
                     # 훈련 데이터를 통한 그래프 그리기
-                    self.draw_img(current_ep=current_ep, data=input_window_db)
-
-                    # 에피소드 넘버 추가
-                    episode += 1
+                    if self.step * iter_cns > 300:
+                        self.draw_img(current_ep=episode, data=self.Buffer.grp_db, path='2')
 
                     self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
                     self.step = 0
                     self.update_t = 0
                     break
             self.CNS.init_cns()
-            sleep(1)
     # ------------------------------------------------------------------
+
+class Buffer:
+    def __init__(self, para):
+        self.para = para
+        self.grp_db = pd.DataFrame([], columns=self.para)
+
+    def Buffer_refresh(self):
+        self.grp_db = pd.DataFrame([], columns=self.para)
+
+    def add_data(self, data):
+        self.grp_db.loc[len(self.grp_db)] = data
 
 
 class CNS:
