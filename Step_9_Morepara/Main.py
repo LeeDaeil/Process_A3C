@@ -22,7 +22,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_2_LSTM'
+MAKE_FILE_PATH = './VER_3_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -38,15 +38,17 @@ episode_test = 0
 Max_score = 0       # if A3C model get Max_score, A3C model will draw the Max_score grape
 FINISH_TRAIN = False
 FINISH_TRAIN_CONDITION = 2.00
+TEST_NETWORK = True
 
 class MainModel:
     def __init__(self):
+        global TEST_NETWORK
         self._make_folder()
         self._make_tensorboaed()
         self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
-        self.test = False
+        self.test = TEST_NETWORK
 
     def run(self):
         worker = self.build_A3C(A3C_test=self.test)
@@ -379,7 +381,7 @@ class A3Cagent(threading.Thread):
             self.para.append(parameter[__])
             self.val.append(value[__])
         # if log != '':
-            self._gym_send_logger(log)
+        self._gym_send_logger(log)
 
     def _gym_send_action(self, action):
         '''
@@ -625,6 +627,7 @@ class A3Cagent(threading.Thread):
             self.optimizer[0]([self.states, self.actions, advantages])
             self.optimizer[1]([self.states, discounted_rewards])
             self.states, self.actions, self.rewards = [], [], []
+
     def add_data(self, real=True, train=False):
         # current state 생성
         if True:
@@ -655,19 +658,20 @@ class A3Cagent(threading.Thread):
    # ------------------------------------------------------------------
     def run(self):
         global episode
-        para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
-                'turbin_elect', 'action']
 
         self.CNS.init_cns()
-
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
         # 훈련 시작하는 부분
         while episode < 20000:
-            current_ep = episode
-            self.logger.info('===Start [{}] ep=========================='.format(current_ep))
-
+            # 1. 에피 소드 시작
+            episode += 1            # 동시 다발적으로 발생하기 때문에 초기에 에피소드를 로드하고 +1을 함
+            current_ep = episode    # 현재 에피소드의 넘버를 저장
+            para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set',
+                    'turbin_real', 'turbin_elect', 'action']
             input_window_db = pd.DataFrame([], columns=para)
+            self.logger.info('===Start [{}] ep=========================='.format(current_ep))
+            # 2. LSTM 10 step 만큼 진행
             for i in range(0, 10):
                 self.CNS.run_freeze_CNS()
 
@@ -681,7 +685,7 @@ class A3Cagent(threading.Thread):
 
             while True:
                 # 오래된 상태에 대한 액션 계산
-                policy, action = self._gym_predict_action(input_window)  # (4,)
+                policy, action = self._gym_predict_action(input_window)  # (1, 1, 4)
                 list_input_window[0][-1].append(action)  # 0 stay, 1: rod out, 2: rod in
                 input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
@@ -718,10 +722,10 @@ class A3Cagent(threading.Thread):
                     for i in range(len(stats)):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
-                    self.summary_writer.add_summary(summary_str, current_ep)
+                    self.summary_writer.add_summary(summary_str, episode + 1)
 
                     # 훈련 데이터 저장
-                    input_window_db.to_csv('{}/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, current_ep))
+                    input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, current_ep))
 
                     # 훈련 데이터를 통한 그래프 그리기
                     self.draw_img(current_ep=current_ep, data=input_window_db)
@@ -821,13 +825,19 @@ class CNS:
 
     def init_cns(self):
         # UDP 통신에 쌇인 데이터를 새롭게 하는 기능
-        self.update_mem()
-        sleep(0.5)
-        self.update_mem()
-        sleep(0.5)
         self._send_control_signal(['KFZRUN'], [5])
-        sleep(2)
-        return 0
+        while True:
+            self.update_mem()
+            if self.mem['KFZRUN']['Val'] == 6:
+                # initial 상태가 완료되면 6으로 되고, break
+                break
+            elif self.mem['KFZRUN']['Val'] == 5:
+                # 아직완료가 안된 상태
+                pass
+            else:
+                # 4가 되는 경우: 이전의 에피소드가 끝나고 4인 상태인데
+                pass
+            sleep(1)
 
     def run_freeze_CNS(self):
         while True:
