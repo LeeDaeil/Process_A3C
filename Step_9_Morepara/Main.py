@@ -22,7 +22,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_5_LSTM'
+MAKE_FILE_PATH = './VER_6_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -45,7 +45,7 @@ class MainModel:
         global TEST_NETWORK
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=3, time_leg=10)
+        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=6, time_leg=10)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
         self.test = TEST_NETWORK
@@ -350,9 +350,9 @@ class A3Cagent(threading.Thread):
         if len(input_window_temp) != self.input_number:
             logging.error('[{}] _make_input_window ERROR'.format(self))
         if self.net_type == 'DNN':
-            out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 3) -> (1, 3)
+            out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 6) -> (1, 6)
         else:
-            out = np.array([self.input_window_box])  # list를 np.array로 전환 (2, 3) -> (1, 2, 3)
+            out = np.array([self.input_window_box])  # list를 np.array로 전환 (2, 6) -> (1, 2, 6)
 
         p = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
              'turbin_elect', 'action']
@@ -388,10 +388,10 @@ class A3Cagent(threading.Thread):
             upper_condition = base_condition + 0.05
             stady_condition = base_condition + 0.02
             low_condition = base_condition - 0.01
-        else: # +- 1% margine
-            upper_condition = base_condition + 0.03
+        else: # +- 2% margine
+            upper_condition = base_condition + 0.04
             stady_condition = base_condition + 0.02
-            low_condition = base_condition + 0.01
+            low_condition = base_condition + 0.00
         return upper_condition, stady_condition, low_condition, power
 
     # ------------------------------------------------------------------
@@ -474,28 +474,30 @@ class A3Cagent(threading.Thread):
             if True:
                 if el_power <= 0:    # before Net break - set up 100 MWe set-point
                     if power >= 10:
-                        if load_set < 100:
+                        if load_set < 910:
                             self.send_act_log_append(['KSWO225'], [1], 'Set point up {}'.format(load_set))
-                        if load_set >= 100:
+                        if load_set >= 910:
                             self.send_act_log_append(['KSWO225'], [0], log='')
-                        if load_rate < 25:
-                            self.send_act_log_append(['KSWO227'], [1], 'Load rate up {}'.format(load_rate))
-                        if load_rate >= 25:
-                            self.send_act_log_append(['KSWO227'], [0], log='')
+                        # 터빈과 같이 출력 으로 바뀌었음.
+                        # if load_rate < 25:
+                        #     self.send_act_log_append(['KSWO227'], [1], 'Load rate up {}'.format(load_rate))
+                        # if load_rate >= 25:
+                        #     self.send_act_log_append(['KSWO227'], [0], log='')
                 else: # after Net break
                     if el_power >= 100:
                         if self.triger['done_steam_dump'] == 0:
                             self._gym_send_logger('Steam dump auto')
                         self.send_act_log_append(['KSWO176'], [0], log='')
                         self.triger['done_steam_dump'] = 1
-                        if self.triger['done_rod_man'] == 0:
-                            self._gym_send_logger('Rod control auto')
-                        self.send_act_log_append(['KSWO28'], [1], log='')
-                        self.triger['done_rod_man'] = 1
+                        # if self.triger['done_rod_man'] == 0:
+                        #     self._gym_send_logger('Rod control auto')
+                        # self.send_act_log_append(['KSWO28'], [1], log='')
+                        # self.triger['done_rod_man'] = 1
             # Pump part
             if True:
-                if self.triger['done_rod_man'] == 1:
-                    if self.triger['done_heat_drain'] == 0:
+                # if self.triger['done_rod_man'] == 1:
+                if True:
+                    if el_power >= 200 and self.triger['done_heat_drain'] == 0:
                         self._gym_send_logger('Heat drain pump on')
                     self.send_act_log_append(['KSWO205'], [1], log='')
                     self.triger['done_heat_drain'] = 1
@@ -521,37 +523,62 @@ class A3Cagent(threading.Thread):
                     self.triger['done_mf_3'] = 1
             # control power / Rod and Turbine load
             if True:
-                if self.triger['done_rod_man'] == 1:
-                    # Turbine control part Load rate control
-                    if action == 0: # stay
-                        self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 0],log='Load stay')
-                    elif action == 1: # Up power : load rate up
-                        self.send_act_log_append(['KSWO227', 'KSWO226'], [1, 0], log='Load up')
-                    elif action == 2: # Down power : load rate down
-                        self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 1], log='Load down')
-                else:
-                    # Rod control part
-                    if action == 0: # stay
-                        self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 0], 'Rod stay')
-                    elif action == 1: # out : increase power
-                        self.send_act_log_append(['KSWO33', 'KSWO32'], [1, 0], 'Rod out')
-                    elif action == 2: # in : decrease power
-                        self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 1], 'Rod in')
+                # if self.triger['done_rod_man'] == 1:
+                #     # Turbine control part Load rate control
+                #     if action == 0: # stay
+                #         self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 0], log='Load stay')
+                #     elif action == 1: # Up power : load rate up
+                #         self.send_act_log_append(['KSWO227', 'KSWO226'], [1, 0], log='Load up')
+                #     elif action == 2: # Down power : load rate down
+                #         self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 1], log='Load down')
+                # else:
+                #     # Rod control part
+                #     if action == 0: # stay
+                #         self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 0], 'Rod stay')
+                #     elif action == 1: # out : increase power
+                #         self.send_act_log_append(['KSWO33', 'KSWO32'], [1, 0], 'Rod out')
+                #     elif action == 2: # in : decrease power
+                #         self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 1], 'Rod in')
+
+                # 제어봉과 터빈 로드 같이 제어하기
+                # 터빈을 동작버튼 누르면 - 점수 제공
+                if action == 0:  # stay
+                    self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 0], 'Rod stay')
+                elif action == 1: # out : increase power
+                    self.send_act_log_append(['KSWO33', 'KSWO32'], [1, 0], 'Rod out')
+                elif action == 2: # in : decrease power
+                    self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 1], 'Rod in')
+                elif action == 3:  # stay
+                    self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 0], log='Load stay')
+                elif action == 4: # Up power : load rate up
+                    self.send_act_log_append(['KSWO227', 'KSWO226'], [1, 0], log='Load up')
+                elif action == 5: # Down power : load rate down
+                    self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 1], log='Load down')
+
         self.CNS._send_control_signal(self.para, self.val)
 
     def _gym_reward_done(self):
 
         def temp_call(power, up_cond, low_cond, std_cond):
+            el_p = self.CNS.mem['KBCDO22']['Val']/1000  # elec power / power의 소수점과 맞추기 위해서 사용
+
             if power > std_cond:  # std 보다 위쪽에 위치한 경우
                 reward = up_cond - power  # 상위 제한치에서 파위를 빼서 보상을 지급 std에 가까울 수록 보상커짐
             elif power < std_cond:
                 reward = power - low_cond
+
+            if el_p > 0:
+                if el_p > std_cond:
+                    reward += up_cond - el_p
+                elif el_p < std_cond:
+                    reward += el_p - low_cond
+
             done, score = False, 1
             return score, reward, done
 
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 1000:    # 제한 시간 초과 시
+        if self.step >= 2000:    # 제한 시간 초과 시
             score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
             done = True
         else:
@@ -563,10 +590,10 @@ class A3Cagent(threading.Thread):
 
     def _gym_append_sample(self, input_window, policy, action, reward):
         if self.net_type == 'DNN':
-            self.states.append(input_window) # (1, 2, 3) -> (2, 3) 잡아서 추출
+            self.states.append(input_window) # (1, 2, 6) -> (2, 6) 잡아서 추출
             # print(np.shape(self.states))
         else:
-            self.states.append(input_window)  # (1, 2, 3) -> (2, 3) 잡아서 추출
+            self.states.append(input_window)  # (1, 2, 6) -> (2, 6) 잡아서 추출
             # print(np.shape(self.states))
         act = np.zeros(self.shared_actor_net.output_shape[1])
         act[action] = 1
@@ -614,8 +641,10 @@ class A3Cagent(threading.Thread):
         ax.grid()
 
         ax2.plot(data['action'])
-        ax2.set_yticks((-1, 0, 1))
-        ax2.set_yticklabels(('In', 'Stay', 'Out'))
+        # ax2.set_yticks((-1, 0, 1))
+        # ax2.set_yticklabels(('In', 'Stay', 'Out'))
+        ax2.set_yticks((0, 1, 2, 3, 4, 5))
+        ax2.set_yticklabels(('Rstay', 'Out', 'In', 'TBStay', 'TBUp', 'TBDown'))
         ax2.set_ylabel('Rod control')
         ax2.grid()
 
@@ -706,8 +735,9 @@ class A3Cagent(threading.Thread):
             while True:
                 # 오래된 상태에 대한 액션 계산
                 policy, action = self._gym_predict_action(input_window)  # (1, 1, 4)
-                a = -1 if action == 2 else action
-                list_input_window[0][-1].append(a)  # 0 stay, 1: rod out, 2: rod in
+                # a = -1 if action == 2 else action
+                a = action
+                list_input_window[0][-1].append(a)  # 0 stay, 1: rod out, 2: rod in 3: turbin stay, 4: turbin up, 5: turbine down
                 input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
                 # 계산된 액션을 CNS에 전송
@@ -719,6 +749,17 @@ class A3Cagent(threading.Thread):
 
                 # new state에 대한 보상 계산
                 score, reward, done = self._gym_reward_done()
+
+                # 전력이 연결되지 않았는데 누르는 경우 마이너스 점수
+                if not done:
+                    power = self.CNS.mem['QPROREL']['Val'] * 100
+                    turbine_real = self.CNS.mem['KBCDO19']['Val']  # Turbine real point
+                    if action >= 3:
+                        if turbine_real >= 1800 and power >= 15:
+                            pass
+                        else:
+                            reward -= 0.05
+
                 self._gym_append_sample(input_window[0], policy, action, reward)
                 self.total_reward += reward
                 self.step += iter_cns
