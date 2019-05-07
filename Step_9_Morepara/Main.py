@@ -22,7 +22,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_4_LSTM'
+MAKE_FILE_PATH = './VER_5_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -56,12 +56,25 @@ class MainModel:
             __.start()
             sleep(1)
         print('All agent start done')
+        count = 1
         while True:
-            sleep(60)
+            sleep(2)
             # 살아 있는지 보여줌
-            workers_step = [worker[i].step for i in range(len(worker))]
-            print('[{}]\t[max:{}][{}]'.format(datetime.datetime.now(), max(workers_step), workers_step))
-            self._save_model()
+            workers_step = ''
+            share_sate = ''
+            looking = ''
+            temp = []
+            for i in worker:
+                workers_step += '{:3d} '.format(i.step)
+                share_sate += '{:3d}'.format(i.CNS.mem['KFZRUN']['Val'])
+                temp.append(i.step)
+            print('[{}][max:{:3d}][{}]'.format(datetime.datetime.now(), max(temp), workers_step))
+            print('[{}][max:{:3d}][{}]'.format(datetime.datetime.now(), max(temp), share_sate))
+            # 모델 save
+            if count == 60:
+                self._save_model()
+                count %= 60
+            count += 1
 
     def build_A3C(self, A3C_test=False):
         '''
@@ -129,8 +142,8 @@ class MainModel:
                 shared = Flatten()(shared)
 
             elif net_type == 'LSTM':
-                shared = LSTM(16, activation='relu')(state)
-                shared = Dense(32)(shared)
+                shared = LSTM(32, activation='relu')(state)
+                shared = Dense(64)(shared)
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
@@ -139,10 +152,10 @@ class MainModel:
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
-        actor_hidden = Dense(32, activation='relu', kernel_initializer='glorot_uniform')(shared)
+        actor_hidden = Dense(64, activation='relu', kernel_initializer='glorot_uniform')(shared)
         action_prob = Dense(ou_pa, activation='softmax', kernel_initializer='glorot_uniform')(actor_hidden)
 
-        value_hidden = Dense(16, activation='relu', kernel_initializer='he_uniform')(shared)
+        value_hidden = Dense(32, activation='relu', kernel_initializer='he_uniform')(shared)
         state_value = Dense(1, activation='linear', kernel_initializer='he_uniform')(value_hidden)
 
         actor = Model(inputs=state, outputs=action_prob)
@@ -215,9 +228,8 @@ class MainModel:
         episode_duration = tf.Variable(0.)
 
         tf.summary.scalar('Total_Reward/Episode', episode_total_reward)
-        tf.summary.scalar('Average_Max Prob/Episode', episode_avg_max_q)
+        tf.summary.scalar('Average_Max_Prob/Episode', episode_avg_max_q)
         tf.summary.scalar('Duration/Episode', episode_duration)
-
         summary_vars = [episode_total_reward, episode_avg_max_q, episode_duration]
         summary_placeholders = [tf.placeholder(tf.float32) for _ in range(len(summary_vars))]
         updata_ops = [summary_vars[i].assign(summary_placeholders[i]) for i in range(len(summary_vars))]
@@ -274,7 +286,7 @@ class A3Cagent(threading.Thread):
         # ===================================================
         self.states, self.actions, self.rewards = [], [], []
         # self.action_log, self.reward_log, self.input_window_log = [], [], []
-        self.total_reward, self.step, self.avg_q_max, self.average_max_step = 0, 0, 0, 0
+        self.total_reward, self.step, self.avg_q_max, self.average_max_step = 0, -22, 0, 0
         self.update_t, self.update_t_limit = 0, 100
         self.input_dim, self.input_number = 1, 4
         # ===================================================
@@ -539,7 +551,7 @@ class A3Cagent(threading.Thread):
 
         up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
 
-        if self.step >= 500:    # 제한 시간 초과 시
+        if self.step >= 1000:    # 제한 시간 초과 시
             score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
             done = True
         else:
@@ -666,6 +678,7 @@ class A3Cagent(threading.Thread):
         self.start_time = datetime.datetime.now()
         self.end_time = datetime.datetime.now()
         self.Buffer = Buffer(para=para)     # 그래프용 데이터를 모으는 부분
+
         iter_cns = 2    # 반복
 
         # 훈련 시작하는 부분
@@ -673,12 +686,13 @@ class A3Cagent(threading.Thread):
             # 1. 에피 소드 시작
             input_window_db = pd.DataFrame([], columns=para)
             self.Buffer.Buffer_refresh()    # 버퍼 초기화
-            for _ in range(3):
-                self.CNS.update_mem()   # 메모리 refresh
+            # for _ in range(3):
+            #     self.CNS.update_mem()   # 메모리 refresh
             self.logger.info('===Start [{}] ep=========================='.format(episode))
             # 2. LSTM 10 step 만큼 진행
             for i in range(0, 10):
                 self.run_cns(iter_cns, action=0)
+                self.step += iter_cns
 
                 input_window, list_input_window = self._make_input_window()    # (1, 1, 4)
 
@@ -686,6 +700,8 @@ class A3Cagent(threading.Thread):
                 input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
 
             self.run_cns(iter_cns, action=0)
+            self.step += iter_cns
+
             input_window, list_input_window = self._make_input_window()  # (1, 1, 4)
             while True:
                 # 오래된 상태에 대한 액션 계산
@@ -710,18 +726,18 @@ class A3Cagent(threading.Thread):
 
                 # 게임의 종료 여부 확인
                 if done or self.update_t > self.update_t_limit:
-                    print('{} Train'.format(self.name))
+                    # print('{} Train'.format(self.name))
                     self.train_episode(done)
                     self.update_t = 0
                 if done:
                     episode += 1
                     self.end_time = datetime.datetime.now()
-                    print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
-                                                                                  self.end_time, self.name,
-                                                                                  episode,
-                                                                                  self.total_reward,
-                                                                                  self.step,
-                                                                                  ))
+                    # print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
+                    #                                                               self.end_time, self.name,
+                    #                                                               episode,
+                    #                                                               self.total_reward,
+                    #                                                               self.step,
+                    #                                                               ))
                     self.start_time = datetime.datetime.now()
 
                     stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
@@ -734,14 +750,15 @@ class A3Cagent(threading.Thread):
                     input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, episode))
 
                     # 훈련 데이터를 통한 그래프 그리기
-                    if self.step > 300:
-                        self.draw_img(current_ep=episode, data=self.Buffer.grp_db, path='2')
+                    if self.step > 500:
+                       self.draw_img(current_ep=episode, data=self.Buffer.grp_db, path='2')
 
                     self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
-                    self.step = 0
+                    self.step = -22
                     self.update_t = 0
                     break
             self.CNS.init_cns()
+            sleep(2)
     # ------------------------------------------------------------------
 
 class Buffer:
@@ -850,6 +867,7 @@ class CNS:
                 pass
             else:
                 # 4가 되는 경우: 이전의 에피소드가 끝나고 4인 상태인데
+                self._send_control_signal(['KFZRUN'], [5])
                 pass
             sleep(1)
 
