@@ -14,15 +14,12 @@ from numpy import shape
 import numpy as np
 from time import sleep
 from collections import deque
-from Step_9_Morepara.Parameter import PARA
-#------------------------------------------------------------------
-from sklearn import preprocessing
 #------------------------------------------------------------------
 import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_9_LSTM'
+MAKE_FILE_PATH = './VER_10_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -38,16 +35,15 @@ episode_test = 0
 Max_score = 0       # if A3C model get Max_score, A3C model will draw the Max_score grape
 FINISH_TRAIN = False
 FINISH_TRAIN_CONDITION = 2.00
-TEST_NETWORK = False
+TEST_NETWORK = True
 
 class MainModel:
     def __init__(self):
         global TEST_NETWORK
         self._make_folder()
         self._make_tensorboaed()
-        self.actor, self.critic = self.build_model(net_type='LSTM', in_pa=4, ou_pa=6, time_leg=10)
-        self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
-
+        self.Rod_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=3)
+        self.Turbine_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=3)
         self.test = TEST_NETWORK
 
     def run(self):
@@ -65,14 +61,13 @@ class MainModel:
             looking = ''
             temp = []
             for i in worker:
-                workers_step += '{:3d} '.format(i.step)
-                share_sate += '{:3d}'.format(i.CNS.mem['KFZRUN']['Val'])
-                temp.append(i.step)
+                workers_step += '{:3d} '.format(i.db.train_DB['Step'][-1])
+                temp.append(i.db.train_DB['Step'][-1])
             print('[{}][max:{:3d}][{}]'.format(datetime.datetime.now(), max(temp), workers_step))
-            print('[{}][max:{:3d}][{}]'.format(datetime.datetime.now(), max(temp), share_sate))
             # 모델 save
             if count == 60:
-                self._save_model()
+                self.Rod_net.save_model('ROD')
+                self.Turbine_net.save_model('TUR')
                 count %= 60
             count += 1
 
@@ -84,48 +79,83 @@ class MainModel:
         '''
         worker = []
         if A3C_test:
-            for i in range(18, 20):
+            for i in range(19, 20):
                 worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7100 + i,
-                                       CNS_ip='192.168.0.2', CNS_port=7000 + i,
-                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
-                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       CNS_ip='192.168.0.9', CNS_port=7000 + i,
+                                       Rod_net=self.Rod_net, Turbine_net=self.Turbine_net, Sess=self.sess,
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                    self.update_ops, self.summary_writer],
-                                       Test_model=False,
-                                       Net_type=self.net_type))
+                                                    self.update_ops, self.summary_writer]))
         else:
             for i in range(0, 20):
                 worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7100 + i,
-                                       CNS_ip='192.168.0.2', CNS_port=7000 + i,
-                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
-                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       CNS_ip='192.168.0.9', CNS_port=7000 + i,
+                                       Rod_net=self.Rod_net, Turbine_net=self.Turbine_net, Sess=self.sess,
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                    self.update_ops, self.summary_writer],
-                                       Test_model=False,
-                                       Net_type=self.net_type))
+                                                    self.update_ops, self.summary_writer]))
             # CNS2
             for i in range(0, 20):
                 worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7200 + i,
                                        CNS_ip='192.168.0.7', CNS_port=7000 + i,
-                                       Shared_actor_net=self.actor,
-                                       Shared_cric_net=self.critic,
-                                       Optimizer=self.optimizer,
-                                       Sess=self.sess,
+                                       Rod_net=self.Rod_net, Turbine_net=self.Turbine_net, Sess=self.sess,
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                    self.update_ops, self.summary_writer],
-                                       Test_model=False,
-                                       Net_type=self.net_type))
+                                                    self.update_ops, self.summary_writer]))
             # CNS3
             for i in range(0, 20):
                 worker.append(A3Cagent(Remote_ip='192.168.0.10', Remote_port=7300 + i,
                                        CNS_ip='192.168.0.4', CNS_port=7000 + i,
-                                       Shared_actor_net=self.actor, Shared_cric_net=self.critic,
-                                       Optimizer=self.optimizer, Sess=self.sess,
+                                       Rod_net=self.Rod_net, Turbine_net=self.Turbine_net, Sess=self.sess,
                                        Summary_ops=[self.summary_op, self.summary_placeholders,
-                                                    self.update_ops, self.summary_writer],
-                                       Test_model=False,
-                                       Net_type=self.net_type))
+                                                    self.update_ops, self.summary_writer]))
         return worker
+
+    def _make_tensorboaed(self):
+        self.sess = tf.InteractiveSession()
+        K.set_session(self.sess)
+        self.sess.run(tf.global_variables_initializer())
+        self.summary_placeholders, self.update_ops, self.summary_op = self._setup_summary()
+        # tensorboard dir change
+        self.summary_writer = tf.summary.FileWriter('{}/a3c'.format(MAKE_FILE_PATH), self.sess.graph)
+
+    def _setup_summary(self):
+        episode_total_reward = tf.Variable(0.)
+        episode_R_avg_max_q = tf.Variable(0.)
+        episode_T_avg_max_q = tf.Variable(0.)
+        episode_duration = tf.Variable(0.)
+
+        tf.summary.scalar('Total_Reward/Episode', episode_total_reward)
+        tf.summary.scalar('R_Average_Max_Prob/Episode', episode_R_avg_max_q)
+        tf.summary.scalar('T_Average_Max_Prob/Episode', episode_T_avg_max_q)
+        tf.summary.scalar('Duration/Episode', episode_duration)
+        summary_vars = [episode_total_reward, episode_R_avg_max_q, episode_T_avg_max_q, episode_duration]
+        summary_placeholders = [tf.placeholder(tf.float32) for _ in range(len(summary_vars))]
+        updata_ops = [summary_vars[i].assign(summary_placeholders[i]) for i in range(len(summary_vars))]
+        summary_op = tf.summary.merge_all()
+
+        return summary_placeholders, updata_ops, summary_op
+
+    def _make_folder(self):
+        fold_list = ['{}/a3c'.format(MAKE_FILE_PATH),
+                     '{}/log'.format(MAKE_FILE_PATH),
+                     '{}/log/each_log'.format(MAKE_FILE_PATH),
+                     '{}/model'.format(MAKE_FILE_PATH),
+                     '{}/img'.format(MAKE_FILE_PATH)]
+        for __ in fold_list:
+            if os.path.isdir(__):
+                shutil.rmtree(__)
+                sleep(1)
+                os.mkdir(__)
+            else:
+                os.mkdir(__)
+
+
+class MainNet:
+    def __init__(self, net_type='DNN', input_pa=1, output_pa=1, time_leg=1):
+        self.net_type = net_type
+        self.input_pa = input_pa
+        self.output_pa = output_pa
+        self.time_leg = time_leg
+        self.actor, self.critic = self.build_model(net_type=self.net_type, in_pa=self.input_pa, time_leg=self.time_leg)
+        self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
     def build_model(self, net_type='DNN', in_pa=1, ou_pa=1, time_leg=1):
         # 8 16 32 64 128 256 512 1024 2048
@@ -169,15 +199,10 @@ class MainModel:
         actor.summary(print_fn=logging.info)
         critic.summary(print_fn=logging.info)
 
-        self.input_para = in_pa
-        self.output_para = ou_pa
-        self.time_leg = time_leg
-        self.net_type = net_type
-
         return actor, critic
 
     def actor_optimizer(self):
-        action = K.placeholder(shape=(None, self.output_para))
+        action = K.placeholder(shape=(None, self.output_pa))
         advantages = K.placeholder(shape=(None, ))
 
         policy = self.actor.output
@@ -196,7 +221,6 @@ class MainModel:
         train = K.function([self.actor.input, action, advantages], [], updates=updates)
         return train
 
-    # make loss function for Value approximation
     def critic_optimizer(self):
         discounted_reward = K.placeholder(shape=(None, ))
 
@@ -210,590 +234,417 @@ class MainModel:
         train = K.function([self.critic.input, discounted_reward], [], updates=updates)
         return train
 
-    def _save_model(self):
-        self.actor.save_weights("{}/Model/A3C_actor.h5".format(MAKE_FILE_PATH))
-        self.critic.save_weights("{}/Model/A3C_cric.h5".format(MAKE_FILE_PATH))
-
-    def _make_tensorboaed(self):
-        self.sess = tf.InteractiveSession()
-        K.set_session(self.sess)
-        self.sess.run(tf.global_variables_initializer())
-        self.summary_placeholders, self.update_ops, self.summary_op = self._setup_summary()
-        # tensorboard dir change
-        self.summary_writer = tf.summary.FileWriter('{}/a3c'.format(MAKE_FILE_PATH), self.sess.graph)
-
-    def _setup_summary(self):
-        episode_total_reward = tf.Variable(0.)
-        episode_avg_max_q = tf.Variable(0.)
-        episode_duration = tf.Variable(0.)
-
-        tf.summary.scalar('Total_Reward/Episode', episode_total_reward)
-        tf.summary.scalar('Average_Max_Prob/Episode', episode_avg_max_q)
-        tf.summary.scalar('Duration/Episode', episode_duration)
-        summary_vars = [episode_total_reward, episode_avg_max_q, episode_duration]
-        summary_placeholders = [tf.placeholder(tf.float32) for _ in range(len(summary_vars))]
-        updata_ops = [summary_vars[i].assign(summary_placeholders[i]) for i in range(len(summary_vars))]
-        summary_op = tf.summary.merge_all()
-
-        return summary_placeholders, updata_ops, summary_op
-
-    def _make_folder(self):
-        fold_list = ['{}/a3c'.format(MAKE_FILE_PATH),
-                     '{}/log'.format(MAKE_FILE_PATH),
-                     '{}/log/each_log'.format(MAKE_FILE_PATH),
-                     '{}/model'.format(MAKE_FILE_PATH),
-                     '{}/img'.format(MAKE_FILE_PATH)]
-        for __ in fold_list:
-            if os.path.isdir(__):
-                shutil.rmtree(__)
-                sleep(1)
-                os.mkdir(__)
-            else:
-                os.mkdir(__)
+    def save_model(self, name):
+        self.actor.save_weights("{}/Model/{}_A3C_actor.h5".format(MAKE_FILE_PATH, name))
+        self.critic.save_weights("{}/Model/{}_A3C_cric.h5".format(MAKE_FILE_PATH, name))
 
 
 class A3Cagent(threading.Thread):
-    def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Shared_actor_net, Shared_cric_net,
-                 Optimizer, Sess, Summary_ops, Test_model, Net_type):
+    def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Rod_net, Turbine_net, Sess, Summary_ops):
         threading.Thread.__init__(self)
+        # 운전 관련 정보 분당 x%
+        self.operation_mode = 1
+
         # CNS와 통신과 데이터 교환이 가능한 모듈 호출
         self.CNS = CNS(self.name, CNS_ip, CNS_port, Remote_ip, Remote_port)
-        # Network initial condition
-        self.shared_actor_net = Shared_actor_net
-        self.shared_cric_net = Shared_cric_net
-        self.net_type = Net_type
-        self.optimizer = Optimizer
-        # initial input window
-        self.input_window_box = deque(maxlen=self.shared_cric_net.input_shape[1])
-        # Tensorboard
-        self.sess = Sess
-        [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
-        # Test mode
-        self.Test_model = Test_model
-        # ============== 운전 모드 분당 몇% 올릴 것인지 =====
-        self.operation_mode = 0.6
-        # ===================================================
-        # logger
-        self.logger = logging.getLogger('{}'.format(self.name))
-        self.logger.setLevel(logging.INFO)
-        self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
-        # ===================================================
-        # logger 입력 윈도우 로그
-        # self.logger_input = logging.getLogger('{}_input'.format(self.name))
-        # self.logger_input.setLevel(logging.INFO)
-        # self.logger_input.addHandler(logging.FileHandler('{}/log/{}.log'.format(MAKE_FILE_PATH, self.name)))
-        # self.logger_input.info('Ep,Step,Power,High_P,Low_P,Std,Mwe')
-        # ===================================================
-        self.states, self.actions, self.rewards = [], [], []
-        # self.action_log, self.reward_log, self.input_window_log = [], [], []
-        self.total_reward, self.step, self.avg_q_max, self.average_max_step = 0, -22, 0, 0
-        self.update_t, self.update_t_limit = 0, 100
-        self.input_dim, self.input_number = 1, 4
-        # ===================================================
-        # 제어봉 로직에서 출력 로직으로 전환
-        self.change_rod_to_auto = False
-        # 트리거 파트
-        self.triger = {
-            'done_trip_block': 0, 'done_turbine_set': 0, 'done_steam_dump': 0, 'done_rod_man': 0, 'done_heat_drain': 0,
-            'done_mf_2': 0, 'done_con_3': 0, 'done_mf_3': 0
+        # 사용되는 입력 파라메터 업데이트
+        self.update_parameter()
+
+        # 네트워크 정보
+        if True:
+            # copy main network
+            self.Rod_net = Rod_net
+            self.Turbine_net = Turbine_net
+
+            # input에 대한 정보 input의 경우 2개의 네트워크 동일하게 공유
+            self.input_time_length = self.Rod_net.actor.input_shape[1]
+            self.input_para_number = self.Rod_net.actor.input_shape[2]
+
+        # 훈련 정보를 저장하는 모듈
+        if True:
+            # Tensorboard
+            self.sess = Sess
+            [self.summary_op, self.summary_placeholders, self.update_ops, self.summary_writer] = Summary_ops
+
+            # logger
+            self.logger = logging.getLogger('{}'.format(self.name))
+            self.logger.setLevel(logging.INFO)
+            self.logger.addHandler(logging.FileHandler('{}/log/each_log/{}.log'.format(MAKE_FILE_PATH, self.name)))
+
+            # 보상이나 상태를 저장하는 부분
+            self.db = DB()
+            self.db.initial_train_DB()
+
+    def update_parameter(self):
+
+        # 사용되는 파라메터 전체 업데이트
+        self.Time_tick = self.CNS.mem['KCNTOMS']['Val']
+        self.Reactor_power = self.CNS.mem['QPROREL']['Val']
+
+        if True:
+            # 원자로 출력 값을 사용하여 최대 최소 바운더리의 값을 구함.
+            base_condition = self.Time_tick / (30000 / self.operation_mode)
+            self.up_condition = base_condition + 0.03
+            self.stady_condition = base_condition + 0.02
+            self.low_condition = base_condition + 0.01
+
+            self.distance_up = self.up_condition - self.Reactor_power
+            self.distance_low = self.Reactor_power - self.low_condition
+
+        self.Turbine_setpoint = self.CNS.mem['KBCDO17']['Val']
+        self.Turbine_ac = self.CNS.mem['KBCDO18']['Val']  # Turbine ac condition
+        self.Turbine_real = self.CNS.mem['KBCDO19']['Val']
+        self.load_set = self.CNS.mem['KBCDO20']['Val']  # Turbine load set point
+        self.load_rate = self.CNS.mem['KBCDO21']['Val']  # Turbine load rate
+        self.Mwe_power = self.CNS.mem['KBCDO22']['Val']
+
+        self.Netbreak_condition = self.CNS.mem['KLAMPO224']['Val'] # 0 : Off, 1 : On
+        self.trip_block = self.CNS.mem['KLAMPO22']['Val']  # Trip block condition 0 : Off, 1 : On
+
+        self.steam_dump_condition = self.CNS.mem['KLAMPO150']['Val'] # 0: auto 1: man
+        self.heat_drain_pump_condition = self.CNS.mem['KLAMPO244']['Val'] # 0: off, 1: on
+        self.main_feed_pump_1 = self.CNS.mem['KLAMPO241']['Val'] # 0: off, 1: on
+        self.main_feed_pump_2 = self.CNS.mem['KLAMPO242']['Val'] # 0: off, 1: on
+        self.main_feed_pump_3 = self.CNS.mem['KLAMPO243']['Val'] # 0: off, 1: on
+        self.cond_pump_1 = self.CNS.mem['KLAMPO181']['Val'] # 0: off, 1: on
+        self.cond_pump_2 = self.CNS.mem['KLAMPO182']['Val'] # 0: off, 1: on
+        self.cond_pump_3 = self.CNS.mem['KLAMPO183']['Val'] # 0: off, 1: on
+
+        self.state =[
+            self.Reactor_power, self.distance_up, self.distance_low, self.stady_condition, self.Mwe_power
+        ]
+
+        self.save_state = {
+            'CNS_time': self.Time_tick, 'Reactor_power': self.Reactor_power * 100,
+            'Reactor_power_up': self.up_condition * 100, 'Reactor_power_low': self.low_condition * 100,
+
+            'Mwe': self.Mwe_power, 'Mwe_up': self.up_condition * 1000, 'Mwe_low':self.low_condition * 1000,
+            'Turbine_set': self.Turbine_setpoint, 'Turbine_ac': self.Turbine_ac,
+            'Turbine_real': self.Turbine_real, 'Load_set': self.Turbine_net,
+            'Load_rate': self.load_rate,
+
+            'Net_break': self.Netbreak_condition, 'Trip_block':self.trip_block,
+            'Stem_pump': self.steam_dump_condition, 'Heat_pump': self.heat_drain_pump_condition,
+            'MF1': self.main_feed_pump_1, 'MF2': self.main_feed_pump_2, 'MF3': self.main_feed_pump_3,
+            'CF1': self.cond_pump_1, 'CF2': self.cond_pump_2, 'CF3': self.cond_pump_3,
         }
 
-    # ------------------------------------------------------------------
-    # 네트워크용 입력 창 생성 및 관리
-    # ------------------------------------------------------------------
+    def run_cns(self, i):
+        for _ in range(0, i):
+            self.CNS.run_freeze_CNS()
 
-    def input_data(self, action):
-        # 1. Read data
-        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
-        Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
-        turbin_set = self.CNS.mem['KBCDO17']['Val']
-        turbin_real = self.CNS.mem['KBCDO19']['Val']
-        turbin_elect = self.CNS.mem['KBCDO22']['Val']
-        # 2. Make (para,)
-        input_window_temp = [
-            power,
-            (up_cond - power) * 10,
-            (power - low_cond) * 10,
-            std_cond,
-            # Mwe_power,
-        ]
-        for para in [up_cond, low_cond, turbin_set, turbin_real, turbin_elect, action]:    # 추가
-            input_window_temp.append(para)
-        return input_window_temp
+    def predict_action(self, actor, input_window):
+        predict_result = actor.predict([[input_window]])
+        policy = predict_result[0]
+        action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
+        return action, predict_result
 
-    def _make_input_window(self):
-        if True:
-            # 0. Min_max_scaler
-            # min_max = preprocessing.MinMaxScaler()
-            # min_data = [0.01, 0, 0, 0] #, 0]
-            # max_data = [0.18, 1, 1, 1] #, 1]
-            # min_max.fit([min_data, max_data])
-            pass
-        # 1. Read data
-        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
-        Mwe_power = self.CNS.mem['KBCDO22']['Val'] / 1000
-        turbin_set = self.CNS.mem['KBCDO17']['Val']
-        turbin_real = self.CNS.mem['KBCDO19']['Val']
-        turbin_elect = self.CNS.mem['KBCDO22']['Val']
-        # 2. Make (para,)
-        input_window_temp = [
-            power,
-            (up_cond - power) * 10,
-            (power - low_cond) * 10,
-            std_cond,
-            # Mwe_power,
-        ]
-        # 2.1 min_max scalling
-        # input_window_temp = list(min_max.transform([input_window_temp])[0])   # 동일한 배열로 반환
-        self.input_window_box.append(input_window_temp)
+    def send_action_append(self, pa, va):
+        for _ in range(len(pa)):
+            self.para.append(pa[_])
+            self.val.append(va[_])
 
-        if len(input_window_temp) != self.input_number:
-            logging.error('[{}] _make_input_window ERROR'.format(self))
-        if self.net_type == 'DNN':
-            out = np.array(self.input_window_box)  # list를 np.array로 전환 (1, 6) -> (1, 6)
-        else:
-            out = np.array([self.input_window_box])  # list를 np.array로 전환 (2, 6) -> (1, 2, 6)
-
-        p = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
-             'turbin_elect', 'action']
-        temp_out = out.tolist()
-        for para in [up_cond, low_cond, turbin_set, turbin_real, turbin_elect]:    # 추가
-            temp_out[0][-1].append(para)
-        return out, temp_out
-
-    # ------------------------------------------------------------------
-    # 운전 모드 별 계산
-    # ------------------------------------------------------------------
-
-    def _calculator_operation_mode(self):
-        '''
-        CNS 시간과 현재 운전 목표를 고려하여 최대, 최소를 구함.
-        '''
-        power = self.CNS.mem['QPROREL']['Val']
-        tick = self.CNS.mem['KCNTOMS']['Val']
-        op_mode = self.operation_mode
-
-        if op_mode == 0.2:      # 0.5%/min
-            base_condition = tick / 60000
-        elif op_mode == 0.4:    # 1.0%/min
-            base_condition = tick / 30000
-        elif op_mode == 0.6:    # 1.5%/min
-            base_condition = tick / 20000
-        elif op_mode == 0.8:    # 2.0%/min
-            base_condition = tick / 15000
-        else:
-            print('Error calculator function')
-
-        if self.triger['done_rod_man'] == 1:  # +- 5 % margine
-            upper_condition = base_condition + 0.05
-            stady_condition = base_condition + 0.02
-            low_condition = base_condition - 0.01
-        else:  # +- 1% margine
-            upper_condition = base_condition + 0.03
-            stady_condition = base_condition + 0.02
-            low_condition = base_condition + 0.01
-        return upper_condition, stady_condition, low_condition, power
-
-    # ------------------------------------------------------------------
-    # gym
-    # ------------------------------------------------------------------
-
-    def _gym_send_logger(self, contents):
-        # contents의 내용과 공통 사항이 포함된 로거를 반환함.
-        if True:
-            power = self.CNS.mem['QPROREL']['Val'] * 100
-            el_power = self.CNS.mem['KBCDO22']['Val']  # elec power
-            turbine_set = self.CNS.mem['KBCDO17']['Val']  # Turbine set point
-            turbine_real = self.CNS.mem['KBCDO19']['Val']  # Turbine real point
-
-        step_ = '[{}]:\t'.format(self.step)
-        common_ = '\t{}[%], {}MWe, Tru[{}/{}]'.format(power, el_power, turbine_set, turbine_real)
-        return self.logger.info(step_ + contents + common_)
-
-    def send_act_log_append(self, parameter, value, log):
-        for __ in range(len(parameter)):
-            self.para.append(parameter[__])
-            self.val.append(value[__])
-        # if log != '':
-        self._gym_send_logger(log)
-
-    def _gym_send_action(self, action):
-        '''
-        :param action: 제어봉 인출 및 삽입 신호 , 터빈 load 제어 신호
-        - 함수의 역할 : 입력된 액션과 현재 제어 상태를 통하여 자동화 신호들을 제작하여 CNS로 송출
-        - 로직
-            1) 메모리로 부터 필요한 발전소 변수 수집
-            2) 수집된 변수로 자동화 로직에 따라서 제어 신호 제작 및 제어 History 작성
-                * history ford : '{}/log/each_log'.format(MAKE_FILE_PATH)
-            3) 제어 신호 전달
-        '''
-        if True:
-            power = self.CNS.mem['QPROREL']['Val'] * 100
-            el_power = self.CNS.mem['KBCDO22']['Val']  # elec power
-            trip_b = self.CNS.mem['KLAMPO22']['Val']   # Trip block condition 0 : Off, 1 : On
-
-            turbine_set = self.CNS.mem['KBCDO17']['Val']   # Turbine set point
-            turbine_real = self.CNS.mem['KBCDO19']['Val']   # Turbine real point
-            turbine_ac = self.CNS.mem['KBCDO18']['Val']     # Turbine ac condition
-
-            load_set = self.CNS.mem['KBCDO20']['Val']  # Turbine load set point
-            load_rate = self.CNS.mem['KBCDO21']['Val']  # Turbine load rate
+    def send_action(self, R_A, T_A):
 
         # 전송될 변수와 값 저장하는 리스트
         self.para = []
         self.val = []
 
-        # History file make
-        if True:
-            # Trip block
-            if trip_b == 0 and power >= 10:
-                if self.triger['done_trip_block'] == 0:
-                    self.logger.info('[{}] :\tTrip block ON'.format(self.step))
-                self.triger['done_trip_block'] = 1
-                self.send_act_log_append(['KSWO22', 'KSWO21'], [1, 1], log='')
-            # Turbine set-point part
-            if True:
-                if power >= 4 and turbine_set < 1750:
-                    self.send_act_log_append(['KSWO213'], [1], 'Turbin UP {}/{}'.format(turbine_set, turbine_real))
+        # 절차서 구성 순서로 진행
+        # 1) 출력이 4% 이상에서 터빈 set point를 맞춘다.
+        if self.Reactor_power >= 0.04 and self.Turbine_setpoint != 1800:
+            if self.Turbine_setpoint < 1780:
+                self.send_action_append(['KSWO213'], [1])
+            elif self.Turbine_setpoint >= 1780:
+                self.send_action_append(['KSWO213'], [0])
+        # 1) 출력 4% 이상에서 터빈 acc 를 200 이하로 맞춘다.
+        if self.Reactor_power >= 0.04 and self.Turbine_ac != 200:
+            if self.Turbine_ac < 190:
+                self.send_action_append(['KSWO215'], [1])
+            elif self.Turbine_ac >= 190:
+                self.send_action_append(['KSWO215'], [0])
+        # 2) 출력 10% 이상에서는 Trip block 우회한다.
+        if self.Reactor_power >= 0.10 and self.trip_block != 1:
+            self.send_action_append(['KSWO22', 'KSWO21'], [1, 1])
+        # 2) 출력 10% 이상에서는 터빈 load를 150 Mwe 까지, rate를 20까지 맞춘다.
+        if self.Reactor_power >= 0.10 and self.Mwe_power <= 0:
+            if self.load_set < 150: self.send_action_append(['KSWO225'], [1])
+            else: self.send_action_append(['KSWO225'], [0])
+            if self.load_rate < 20: self.send_action_append(['KSWO227'], [1])
+            else: self.send_action_append(['KSWO225'], [0])
+        # 3) 출력 15% 이상 및 터빈 rpm이 1800이 되면 netbreak 한다.
+        if self.Reactor_power >= 0.15 and self.Turbine_real >= 1790 and self.Netbreak_condition != 1:
+            self.send_action_append(['KSWO244'], [1])
+        # 4) 출력 15% 이상 및 전기 출력이 존재하는 경우, steam dump auto로 전향
+        if self.Reactor_power >= 0.15 and self.Mwe_power > 0 and self.steam_dump_condition == 1:
+            self.send_action_append(['KSWO176'], [0])
+        # 4) 출력 15% 이상 및 전기 출력이 존재하는 경우, heat drain pump on
+        if self.Reactor_power >= 0.15 and self.Mwe_power > 0 and self.heat_drain_pump_condition == 0:
+            self.send_action_append(['KSWO205'], [1])
+        # 5) 출력 20% 이상 및 전기 출력이 190Mwe 이상 인경우
+        if self.Reactor_power >= 0.20 and self.Mwe_power >= 190 and self.cond_pump_2 == 0:
+            self.send_action_append(['KSWO205'],[1])
+        # 6) 출력 40% 이상 및 전기 출력이 380Mwe 이상 인경우
+        if self.Reactor_power >= 0.40 and self.Mwe_power >= 380 and self.main_feed_pump_2 == 0:
+            self.send_action_append(['KSWO193'], [1])
+        # 7) 출력 50% 이상 및 전기 출력이 475Mwe
+        if self.Reactor_power >= 0.50 and self.Mwe_power >= 475 and self.cond_pump_3 == 0:
+            self.send_action_append(['KSWO206'],[1])
+        # 8) 출력 80% 이상 및 전기 출력이 765Mwe
+        if self.Reactor_power >= 0.80 and self.Mwe_power >= 765 and self.main_feed_pump_3 == 0:
+            self.send_action_append(['KSWO192'], [1])
 
-                if power >= 4 and turbine_set >= 1750:
-                    if self.triger['done_turbine_set'] == 0:
-                        self._gym_send_logger('Turbin set point done {}/{}'.format(turbine_set, turbine_real))
-                    self.triger['done_turbine_set'] = 1
-                    self.send_act_log_append(['KSWO213'], [0], log='')
-            # Turbine acclerator up part
-            if True:
-                if power >= 4 and turbine_ac < 180:
-                    self.send_act_log_append(['KSWO215'], [1], log='Turbin ac up {}'.format(turbine_ac))
-                elif turbine_ac >= 200:
-                    self.send_act_log_append(['KSWO215'], [0], log='')
-            # Net break part
-            if turbine_real >= 1800 and power >= 15:
-                self.send_act_log_append(['KSWO244'], [1], 'Net break On')
-            # Load rate control part
-            if True:
-                if el_power <= 0:    # before Net break - set up 100 MWe set-point
-                    if power >= 10:
-                        if load_set < 100:
-                            self.send_act_log_append(['KSWO225'], [1], 'Set point up {}'.format(load_set))
-                        if load_set >= 100:
-                            self.send_act_log_append(['KSWO225'], [0], log='')
-                        if load_rate < 25:
-                            self.send_act_log_append(['KSWO227'], [1], 'Load rate up {}'.format(load_rate))
-                        if load_rate >= 25:
-                            self.send_act_log_append(['KSWO227'], [0], log='')
-                else: # after Net break
-                    if el_power >= 100:
-                        if self.triger['done_steam_dump'] == 0:
-                            self._gym_send_logger('Steam dump auto')
-                        self.send_act_log_append(['KSWO176'], [0], log='')
-                        self.triger['done_steam_dump'] = 1
-                        if self.triger['done_rod_man'] == 0:
-                            self._gym_send_logger('Rod control auto')
-                        self.send_act_log_append(['KSWO28'], [1], log='')
-                        self.triger['done_rod_man'] = 1
-            # Pump part
-            if True:
-                if self.triger['done_rod_man'] == 1:
-                    if self.triger['done_heat_drain'] == 0:
-                        self._gym_send_logger('Heat drain pump on')
-                    self.send_act_log_append(['KSWO205'], [1], log='')
-                    self.triger['done_heat_drain'] = 1
+        # 9) 제어봉 조작 신호를 보내기
+        if R_A == 0: self.send_action_append(['KSWO33', 'KSWO32'], [0, 0])  # Stay
+        elif R_A == 1: self.send_action_append(['KSWO33', 'KSWO32'], [1, 0])  # Out
+        elif R_A == 2: self.send_action_append(['KSWO33', 'KSWO32'], [0, 1])  # In
 
-                    if el_power >= 200 and self.triger['done_heat_drain'] == 1:
-                        self._gym_send_logger('Condensor Pump 2 On')
-                    self.send_act_log_append(['KSWO205'], [1],log='')
-                    self.send_act_log_append(['KSWO171', 'KSWO165', 'KSWO159'], [1, 1, 1],log='')
-
-                    if el_power >= 400 and self.triger['done_mf_2'] == 0:
-                        self._gym_send_logger('Main Feed Pump 2 On')
-                    self.send_act_log_append(['KSWO193'], [1],log='')
-                    self.triger['done_mf_2'] = 1
-
-                    if el_power >= 500 and self.triger['done_con_3'] == 0:
-                        self._gym_send_logger('Condensor Pump 3 On')
-                    self.send_act_log_append(['KSWO206'], [1],log='')
-                    self.triger['done_con_3'] = 1
-
-                    if el_power >= 800 and self.triger['done_mf_3'] == 0:
-                        self._gym_send_logger('Main Feed Pump 3 On')
-                    self.send_act_log_append(['KSWO192'], [1],log='')
-                    self.triger['done_mf_3'] = 1
-                # 제어봉과 터빈 로드 같이 제어하기
-                # 터빈을 동작버튼 누르면 - 점수 제공
-                if action == 0:  # stay
-                    self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 0], 'Rod stay')
-                elif action == 1: # out : increase power
-                    self.send_act_log_append(['KSWO33', 'KSWO32'], [1, 0], 'Rod out')
-                elif action == 2: # in : decrease power
-                    self.send_act_log_append(['KSWO33', 'KSWO32'], [0, 1], 'Rod in')
-                elif action == 3:  # stay
-                    self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 0], log='Load stay')
-                elif action == 4: # Up power : load rate up
-                    self.send_act_log_append(['KSWO227', 'KSWO226'], [1, 0], log='Load up')
-                elif action == 5: # Down power : load rate down
-                    self.send_act_log_append(['KSWO227', 'KSWO226'], [0, 1], log='Load down')
-
+        # 10) 터빈 load 제어 신호 보내기
+        if self.Netbreak_condition == 1:
+            if T_A == 0: self.send_action_append(['KSWO227', 'KSWO226'], [0, 0])  # Stay
+            elif T_A == 1: self.send_action_append(['KSWO227', 'KSWO226'], [1, 0])  # up
+            elif T_A == 2: self.send_action_append(['KSWO227', 'KSWO226'], [0, 1])  # down
         self.CNS._send_control_signal(self.para, self.val)
 
-    def _gym_reward_done(self):
+    def get_reward_done(self):
+        if self.Reactor_power > self.stady_condition:
+            Rod_R = self.up_condition - self.Reactor_power
+        else:
+            Rod_R = self.Reactor_power - self.low_condition
 
-        def temp_call(power, up_cond, low_cond, std_cond):
-            el_p = self.CNS.mem['KBCDO22']['Val']/1000  # elec power / power의 소수점과 맞추기 위해서 사용
+        if self.Netbreak_condition == 1:
+            if self.low_condition <= self.Mwe_power/1000 <= self.up_condition:
+                if self.Mwe_power/1000 > self.stady_condition:
+                    Tur_R = self.up_condition - self.Mwe_power/1000
+                else:
+                    Tur_R = self.Mwe_power / 1000 - self.low_condition
+            else:
+                Tur_R = 0
+        else:
+            Tur_R = 0
 
-            if power > std_cond:  # std 보다 위쪽에 위치한 경우
-                reward = up_cond - power  # 상위 제한치에서 파위를 빼서 보상을 지급 std에 가까울 수록 보상커짐
-            elif power < std_cond:
-                reward = power - low_cond
-
-            if el_p > 0:
-                if el_p > std_cond:
-                    reward += up_cond - el_p
-                elif el_p < std_cond:
-                    reward += el_p - low_cond
-
-            done, score = False, 1
-            return score, reward, done
-
-        up_cond, std_cond, low_cond, power = self._calculator_operation_mode()
-
-        if self.step >= 2000:    # 제한 시간 초과 시
-            score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
+        if Rod_R < 0 or self.db.train_DB['Step'][-1] >= 2000:
             done = True
-        else:
-            if power >= low_cond and power <= up_cond: # 범위 내에서 운전 시 보상 지급
-                score, reward, done = temp_call(power, up_cond, low_cond, std_cond)
-            else:
-                score, reward, done = 0, 0.0, True
-        return score, reward, done
 
-    def _gym_append_sample(self, input_window, policy, action, reward):
-        if self.net_type == 'DNN':
-            self.states.append(input_window) # (1, 2, 6) -> (2, 6) 잡아서 추출
-            # print(np.shape(self.states))
-        else:
-            self.states.append(input_window)  # (1, 2, 6) -> (2, 6) 잡아서 추출
-            # print(np.shape(self.states))
-        act = np.zeros(self.shared_actor_net.output_shape[1])
-        act[action] = 1
-        self.actions.append(act)
-        self.rewards.append(reward)
+        return done, Rod_R, Tur_R
 
-    def _gym_predict_action(self, input_window):
-        # policy = self.local_actor_model.predict(input_window)[0]
-        # policy = self.shared_actor_net.predict(np.reshape(input_window, [self.input_dim, self.input_number]))[0]
-        predict_result = self.shared_actor_net.predict([input_window])
-        policy = predict_result[0]
-        if self.Test_model:
-            # 검증 네트워크의 경우 결과를 정확하게 뱉음
-            action = np.argmax(policy)
-        elif FINISH_TRAIN:
-            # if train is finish, network will be acted as "np.argmax(policy)"
-            action = np.argmax(policy)
-        else:
-            # 훈련 네트워크의 경우 랜덤을 값을 뱉음.
-            action = np.random.choice(np.shape(policy)[0], 1, p=policy)[0]
-        self.avg_q_max += np.amax(predict_result)
-        self.average_max_step += 1      # It will be used to calculate the average_max_prob.
-        # print(predict_result, policy, action)
-        return policy, action
+    def train_network(self):
 
-    def draw_img(self, current_ep, data, path):
-        # ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set', 'turbin_real',
-        #              'turbin_elect', 'action']
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(5, 3)
-        ax = fig.add_subplot(gs[:-2, :])
-        ax_ = ax.twinx()
-        ax2 = fig.add_subplot(gs[-2, :])
-        ax3 = fig.add_subplot(gs[-1, :])
+        def discount_reward(rewards):
+            discounted_reward = np.zeros(rewards)
+            running_add = 0
+            for _ in reversed(range(len(rewards))):
+                running_add = running_add * 0.99 + rewards[_]
+                discounted_reward[_] = running_add
+            return discounted_reward
 
-        ax.plot(data['power'], 'g')
-        ax.plot(data['low_cond'], 'r')
-        ax.plot(data['up_cond'], 'b')
-        ax_.plot(data['turbin_elect'], 'black')
+        Rod_dis_reward = discount_reward(self.db.train_DB['Rod_R'])
+        Rod_values = self.Rod_net.critic.predict(np.array(self.db.train_DB['S']))
+        Rod_advantages = Rod_dis_reward - np.reshape(Rod_values, len(Rod_values))
 
-        ax.set_ylabel('Reactor Power [%]')
-        ax_.set_ylabel('Electrical Power [MWe]')
-        ax.set_ylim(bottom=0)
-        ax_.set_ylim(bottom=0)
-        ax.grid()
+        self.Rod_net.optimizer[0]([self.db.train_DB['S'], self.db.train_DB['Rod_A'], Rod_advantages])
+        self.Rod_net.optimizer[1]([self.db.train_DB['S'], Rod_dis_reward])
 
-        ax2.plot(data['action'])
-        # ax2.set_yticks((-1, 0, 1))
-        # ax2.set_yticklabels(('In', 'Stay', 'Out'))
-        ax2.set_yticks((0, 1, 2, 3, 4, 5))
-        ax2.set_yticklabels(('Rstay', 'Out', 'In', 'TBStay', 'TBUp', 'TBDown'))
-        ax2.set_ylabel('Rod control')
-        ax2.grid()
+        if self.Netbreak_condition == 1:
+            Tur_dis_reward = discount_reward(self.db.train_DB['Tur_R'])
+            Tur_values = self.Turbine_net.critic.predict(np.array(self.db.train_DB['S']))
+            Tur_advantages = Tur_dis_reward - np.reshape(Tur_values, len(Tur_values))
 
-        ax3.plot(data['turbin_set'], 'r')
-        ax3.plot(data['turbin_real'], 'b')
-        ax3.set_yticks((900, 1800))
-        ax3.grid()
-        ax3.set_yticklabels(('900', '1800'))
-        ax3.set_ylabel('Turbine RPM')
-        ax3.set_xlabel('Time [s]')
+            self.Turbine_net.optimizer[0]([self.db.train_DB['S'], self.db.train_DB['Rod_A'], Tur_advantages])
+            self.Turbine_net.optimizer[1]([self.db.train_DB['S'], Tur_dis_reward])
 
-        fig.savefig(fname='{}/img/{}_{}_{}.png'.format(MAKE_FILE_PATH, path, current_ep, self.name), dpi=600, facecolor=None)
+        self.db.initial_each_trian_DB()
 
-    # ------------------------------------------------------------------
-    # 네트워크 훈련 관련
-    # ------------------------------------------------------------------
-
-    def discount_rewards(self, rewards, done=True):
-        discounted_rewards = np.zeros_like(rewards)
-        running_add = 0
-        if not done:
-            # running_add = self.shared_cric_net.predict(np.array([self.states[-1]]))[0]
-            # print(self.states[-1], self)
-            pass
-        for t in reversed(range(0, len(rewards))):
-            running_add = running_add * 0.99 + rewards[t]
-            discounted_rewards[t] = running_add
-        return discounted_rewards
-
-    # update policy network and value network every episode
-    def train_episode(self, done):
-        global FINISH_TRAIN, FINISH_TRAIN_CONDITION
-        discounted_rewards = self.discount_rewards(self.rewards, done)
-
-        values = self.shared_cric_net.predict(np.array(self.states))
-        values = np.reshape(values, len(values))
-
-        advantages = discounted_rewards - values
-
-        if FINISH_TRAIN:
-            self.states, self.actions, self.rewards = [], [], []
-        else:
-            self.optimizer[0]([self.states, self.actions, advantages])
-            self.optimizer[1]([self.states, discounted_rewards])
-            self.states, self.actions, self.rewards = [], [], []
-
-    def run_cns(self, i, action):
-        for _ in range(i):
-            self.CNS.run_freeze_CNS()
-            if _ == 0:
-                self.Buffer.add_data(self.input_data(action=action))
-            else:
-                self.Buffer.add_data(self.input_data(action=0))
-   # ------------------------------------------------------------------
     def run(self):
-        global episode
-        para = ['power', 'up_cond*10', 'low_cond*10', 'std_cond', 'up_cond', 'low_cond', 'turbin_set',
-                'turbin_real', 'turbin_elect', 'action']
-        self.CNS.init_cns()
-        self.start_time = datetime.datetime.now()
-        self.end_time = datetime.datetime.now()
-        self.Buffer = Buffer(para=para)     # 그래프용 데이터를 모으는 부분
 
+        global episode
+        self.CNS.init_cns()
         iter_cns = 2    # 반복
 
         # 훈련 시작하는 부분
         while episode < 20000:
-            # 1. 에피 소드 시작
-            input_window_db = pd.DataFrame([], columns=para)
-            self.Buffer.Buffer_refresh()    # 버퍼 초기화
-            # for _ in range(3):
-            #     self.CNS.update_mem()   # 메모리 refresh
-            self.logger.info('===Start [{}] ep=========================='.format(episode))
-            # 2. LSTM 10 step 만큼 진행
-            for i in range(0, 10):
-                self.run_cns(iter_cns, action=0)
-                self.step += iter_cns
+            # 1. input_time_length 까지 데이터 수집 (10번)
+            for i in range(0, self.input_time_length):
+                self.run_cns(iter_cns)
+                self.update_parameter()
+                self.db.add_now_state(Now_S=self.state)
+                self.db.train_DB['Step'].append(len(self.db.train_DB['Step']) * iter_cns)
 
-                input_window, list_input_window = self._make_input_window()    # (1, 1, 4)
-
-                list_input_window[0][-1].append(0) # 0 stay, 1: rod out, 2: rod in
-                input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
-
-            self.run_cns(iter_cns, action=0)
-            self.step += iter_cns
-
-            input_window, list_input_window = self._make_input_window()  # (1, 1, 4)
+            # 2. 반복 수행 시작
             while True:
-                # 오래된 상태에 대한 액션 계산
-                policy, action = self._gym_predict_action(input_window)  # (1, 1, 4)
-                # a = -1 if action == 2 else action
-                a = action
-                list_input_window[0][-1].append(a)  # 0 stay, 1: rod out, 2: rod in 3: turbin stay, 4: turbin up, 5: turbine down
-                input_window_db.loc[len(input_window_db)] = list_input_window[0][-1]  # (1, 4, 4) 에서 마지막 값을 추출
+                # 2.1 최근 상태 정보를 토대 Rod 제어 예측
+                old_state = self.db.train_DB['Now_S'][-self.input_time_length:]
 
-                # 계산된 액션을 CNS에 전송
-                self._gym_send_action(action)
+                # 기본적으로 아래와 같이 상태를 추출하면 (time_length, input_para_nub) 형태로 나옴.
+                Rod_A, R_pd_r = self.predict_action(self.Rod_net.actor, old_state)
+                self.db.train_DB['R_Avg_q_max'] += np.max(R_pd_r)
+                self.db.train_DB['R_Avg_max_step'] += 1
 
-                # 액션을 수행하고 현재 상태 계산
-                self.run_cns(iter_cns, action=a)
-                input_window, list_input_window = self._make_input_window()  # (1, 1, 4) # new state
+                # 2.1 Turbine 제어 예측
+                Tur_A, T_pd_r = self.predict_action(self.Turbine_net.actor, old_state)
+                if self.Netbreak_condition == 1:
+                    self.db.train_DB['T_Avg_q_max'] += np.max(T_pd_r)
+                    self.db.train_DB['T_Avg_max_step'] += 1
 
-                # new state에 대한 보상 계산
-                score, reward, done = self._gym_reward_done()
+                # 2.2 최근 상태에 대한 액션을 CNS로 전송하고 뿐만아니라 자동 제어 신호도 전송한다.
+                self.send_action(R_A=Rod_A, T_A=Tur_A)
 
-                # 전력이 연결되지 않았는데 누르는 경우 마이너스 점수
-                if not done:
-                    power = self.CNS.mem['QPROREL']['Val'] * 100
-                    turbine_real = self.CNS.mem['KBCDO19']['Val']  # Turbine real point
-                    if action >= 3:
-                        if turbine_real >= 1800 and power >= 15:
-                            pass
-                        else:
-                            reward -= 0.05
+                # 2.2 제어 정보와, 상태에 대한 정보를 저장한다.
+                self.save_state['Rod_A'] = -1 if Rod_A == 2 else Rod_A
+                self.save_state['Tur_A'] = -1 if Tur_A == 2 else Tur_A
+                self.save_state['time'] = self.db.train_DB['Step'][-1]
+                self.db.save_state(self.save_state)
 
-                self._gym_append_sample(input_window[0], policy, action, reward)
-                self.total_reward += reward
-                self.step += iter_cns
-                self.update_t += 1
+                # 2.3 제어에 대하여 CNS 동작 시키고 현재 상태 업데이트한다.
+                self.run_cns(iter_cns)
+                self.update_parameter()
+                self.db.add_now_state(Now_S=self.state) # self.state 가 업데이트 된 상태이다. New state
+                # 2.4 새로운 상태에 대한 상태 평가를 시작한다.
+                done, Rod_R, Tur_R = self.get_reward_done()
+                # 2.5 평가를 저장한다.
+                self.db.add_train_DB(S=old_state, R_R=Rod_R, R_A=Rod_A, T_R=Tur_R, T_A=Tur_A)
+                # 2.5 기타 변수를 업데이트 한다.
+                self.db.train_DB['Step'].append(len(self.db.train_DB['Step']) * iter_cns)
 
-                # 게임의 종료 여부 확인
-                if done or self.update_t > self.update_t_limit:
-                    # print('{} Train'.format(self.name))
-                    self.train_episode(done)
-                    self.update_t = 0
+                # 2.6 일정 시간 마다 네트워크를 업데이트 한다. 또는 죽으면 update 한다.
+                if self.db.train_DB['Up_t'] >= self.db.train_DB['Up_t_end'] or done:
+                    self.train_network()
+                    self.db.train_DB['Up_t'] = 0
+                else:
+                    self.db.train_DB['Up_t'] += 1
+
+                # 2.7 done에 도달함.
                 if done:
                     episode += 1
-                    self.end_time = datetime.datetime.now()
-                    # print("[TRAIN][{}/{}]{} Episode:{}, Score:{}, Step:{}".format(self.start_time,
-                    #                                                               self.end_time, self.name,
-                    #                                                               episode,
-                    #                                                               self.total_reward,
-                    #                                                               self.step,
-                    #                                                               ))
-                    self.start_time = datetime.datetime.now()
-
-                    stats = [self.total_reward, self.avg_q_max / self.average_max_step, self.step]
+                    # tensorboard update
+                    stats = [self.db.train_DB['TotR'][-1],
+                             self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
+                             self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step'],
+                             self.db.train_DB['Step'][-1]]
                     for i in range(len(stats)):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
                     self.summary_writer.add_summary(summary_str, episode)
-
-                    # 훈련 데이터 저장
-                    input_window_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.name, episode))
-
-                    # 훈련 데이터를 통한 그래프 그리기
-                    if self.step > 500:
-                       self.draw_img(current_ep=episode, data=self.Buffer.grp_db, path='2')
-
-                    self.avg_q_max, self.average_max_step, self.total_reward = 0, 0, 0
-                    self.step = -22
-                    self.update_t = 0
+                    if self.db.train_DB['Step'][-1] > 50:
+                        self.draw_img(current_ep=episode)
+                    # DB initial
+                    self.db.initial_train_DB()
+                    self.CNS.init_cns()
+                    sleep(2)
                     break
-            self.CNS.init_cns()
-            sleep(2)
-    # ------------------------------------------------------------------
 
-class Buffer:
-    def __init__(self, para):
-        self.para = para
-        self.grp_db = pd.DataFrame([], columns=self.para)
 
-    def Buffer_refresh(self):
-        self.grp_db = pd.DataFrame([], columns=self.para)
+class DB:
+    def __init__(self):
+        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [], 'Tur_R': [], 'Tur_A': [],
+                         'Save_R_R': [], 'Save_R_A': [], 'Save_T_R': [], 'Save_T_A': [],
+                         'TotR': [], 'Step': [],
+                         'R_Avg_q_max': 0, 'R_Avg_max_step': 0,
+                         'T_Avg_q_max': 0, 'T_Avg_max_step': 0,
+                         'Up_t':0, 'Up_t_end': 100}
+        self.gp_db = pd.DataFrame()
+        self.fig = plt.figure(constrained_layout=True, figsize=(13, 10))
+        self.gs = self.fig.add_gridspec(13, 3)
+        self.axs = [self.fig.add_subplot(self.gs[0:3, :]),
+                    self.fig.add_subplot(self.gs[3:6, :]),
+                    self.fig.add_subplot(self.gs[6:8, :]),
+                    self.fig.add_subplot(self.gs[8:9, :]),
+                    self.fig.add_subplot(self.gs[9:10, :]),
+                    self.fig.add_subplot(self.gs[10:13, :]),
+                    ]
 
-    def add_data(self, data):
-        self.grp_db.loc[len(self.grp_db)] = data
+    def initial_train_DB(self):
+        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [], 'Tur_R': [], 'Tur_A': [],
+                         'Save_R_R': [], 'Save_R_A': [], 'Save_T_R': [], 'Save_T_A': [],
+                         'TotR': [], 'Step': [],
+                         'R_Avg_q_max': 0, 'R_Avg_max_step': 0,
+                         'T_Avg_q_max': 0, 'T_Avg_max_step': 0,
+                         'Up_t':0, 'Up_t_end': 100}
+        self.gp_db = pd.DataFrame()
+
+    def initial_each_trian_DB(self):
+        for _ in ['S', 'Rod_R', 'Rod_A', 'Tur_R', 'Tur_A']:
+            self.train_DB[_] = []
+
+    def add_now_state(self, Now_S):
+        self.train_DB['Now_S'].append(Now_S)
+
+    def add_train_DB(self, S, R_R, R_A, T_R, T_A):
+        self.train_DB['S'].append(S)
+        self.train_DB['Rod_R'].append(R_R)
+        self.train_DB['Save_R_R'].append(R_R)
+        self.train_DB['Rod_A'].append(R_A)
+        self.train_DB['Save_R_A_R'].append(R_A)
+        self.train_DB['Tur_R'].append(T_R)
+        self.train_DB['Save_T_R'].append(T_R)
+        self.train_DB['Tur_A'].append(T_A)
+        self.train_DB['Save_T_A'].append(T_A)
+        self.train_DB['Step'].append(len(self.train_DB['Step']))
+        self.train_DB['TotR'] += self.train_DB['Rod_R'][-1] + self.train_DB['Tur_R'][-1]
+
+    def save_state(self, save_data_dict):
+        temp = pd.DataFrame()
+        for key in save_data_dict.keys():
+            temp[key] = [save_data_dict[key]]
+        self.gp_db = self.gp_db.append(temp, ignore_index=True)
+
+    def draw_img(self, current_ep):
+        for _ in self.axs:
+            _.clean()
+        #
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power'], 'g')
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_up'], 'b')
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_low'], 'r')
+        self.axs[0].set_ylabel('Reactor Power [%]')
+        self.axs[0].grid()
+        #
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe'], 'g')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r')
+        self.axs[1].set_ylabel('Electrical Power [MWe]')
+        self.axs[1].grid()
+        #
+        self.axs[2].plot(self.gp_db['time'], self.gp_db['Turbine_set'], 'r')
+        self.axs[2].plot(self.gp_db['time'], self.gp_db['Turbine_real'], 'b')
+        self.axs[2].set_yticks((900, 1800))
+        self.axs[2].set_yticklabels(('900', '1800'))
+        self.axs[2].set_ylabel('Turbine RPM')
+        self.axs[2].grid()
+        #
+        self.axs[3].plot(self.gp_db['time'], self.gp_db['Rod_A'], 'black')
+        self.axs[3].set_yticks((-1, 0, 1))
+        self.axs[3].set_yticklabels(('In', 'Stay', 'Out'))
+        self.axs[3].set_ylabel('Rod Control')
+        self.axs[3].grid()
+        #
+        self.axs[4].plot(self.gp_db['time'], self.gp_db['Tur_A'], 'black')
+        self.axs[4].set_yticks((-1, 0, 1))
+        self.axs[4].set_yticklabels(('In', 'Stay', 'Out'))
+        self.axs[4].set_ylabel('Turbine Control')
+        self.axs[4].grid()
+        #
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['Net_break'], label='Net break')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['Trip_block'], label='Trip block')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['Stem_pump'], label='Stem dump valve auto')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['Heat_pump'], label='Heat pump')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF1'], label='Main Feed Water Pump 1')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF2'], label='Main Feed Water Pump 2')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF3'], label='Main Feed Water Pump 3')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF1'], label='Condensor Pump 1')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF2'], label='Condensor Pump 2')
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF3'], label='Condensor Pump 3')
+        self.axs[5].set_yticks((0, 1))
+        self.axs[5].set_yticklabels(('Off', 'On'))
+        self.axs[5].set_xlabel('Time [s]')
+        self.axs[5].legend()
+        self.axs[5].grid()
+        #
+        self.fig.savefig(fname='{}/img/{}.png'.format(MAKE_FILE_PATH, current_ep), dpi=600, facecolor=None)
+        self.gp_db.to_csv('{}/log/{}.csv'.format(MAKE_FILE_PATH, current_ep))
 
 
 class CNS:
+
     def __init__(self, Thread_name, CNS_IP, CNS_Port, Remote_IP, Remote_Port):
         if True:
             # Ip, Port
@@ -907,11 +758,6 @@ class CNS:
                 # 1회 run 수행이 완료가 되지 않은 상태
                 pass
             sleep(1)
-
-
-        # if self.mem['KFZRUN']['Val'] == 4:
-        #     print('Hear')
-        #     pass
 
 
 if __name__ == '__main__':
