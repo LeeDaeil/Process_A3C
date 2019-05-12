@@ -35,15 +35,15 @@ episode_test = 0
 Max_score = 0       # if A3C model get Max_score, A3C model will draw the Max_score grape
 FINISH_TRAIN = False
 FINISH_TRAIN_CONDITION = 2.00
-TEST_NETWORK = True
+TEST_NETWORK = False
 
 class MainModel:
     def __init__(self):
         global TEST_NETWORK
         self._make_folder()
         self._make_tensorboaed()
-        self.Rod_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=3)
-        self.Turbine_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=3)
+        self.Rod_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=10)
+        self.Turbine_net = MainNet(net_type='LSTM', input_pa=5, output_pa=3, time_leg=10)
         self.test = TEST_NETWORK
 
     def run(self):
@@ -61,8 +61,8 @@ class MainModel:
             looking = ''
             temp = []
             for i in worker:
-                workers_step += '{:3d} '.format(i.db.train_DB['Step'][-1])
-                temp.append(i.db.train_DB['Step'][-1])
+                workers_step += '{:3d} '.format(i.db.train_DB['Step'])
+                temp.append(i.db.train_DB['Step'])
             print('[{}][max:{:3d}][{}]'.format(datetime.datetime.now(), max(temp), workers_step))
             # 모델 save
             if count == 60:
@@ -154,7 +154,8 @@ class MainNet:
         self.input_pa = input_pa
         self.output_pa = output_pa
         self.time_leg = time_leg
-        self.actor, self.critic = self.build_model(net_type=self.net_type, in_pa=self.input_pa, time_leg=self.time_leg)
+        self.actor, self.critic = self.build_model(net_type=self.net_type, in_pa=self.input_pa,
+                                                   ou_pa=self.output_pa, time_leg=self.time_leg)
         self.optimizer = [self.actor_optimizer(), self.critic_optimizer()]
 
     def build_model(self, net_type='DNN', in_pa=1, ou_pa=1, time_leg=1):
@@ -320,7 +321,7 @@ class A3Cagent(threading.Thread):
 
             'Mwe': self.Mwe_power, 'Mwe_up': self.up_condition * 1000, 'Mwe_low':self.low_condition * 1000,
             'Turbine_set': self.Turbine_setpoint, 'Turbine_ac': self.Turbine_ac,
-            'Turbine_real': self.Turbine_real, 'Load_set': self.Turbine_net,
+            'Turbine_real': self.Turbine_real, 'Load_set': self.load_set,
             'Load_rate': self.load_rate,
 
             'Net_break': self.Netbreak_condition, 'Trip_block':self.trip_block,
@@ -423,21 +424,22 @@ class A3Cagent(threading.Thread):
         else:
             Tur_R = 0
 
-        if Rod_R < 0 or self.db.train_DB['Step'][-1] >= 2000:
+        if Rod_R < 0 or self.db.train_DB['Step'] >= 2000:
             done = True
+        else:
+            done = False
 
         return done, Rod_R, Tur_R
 
     def train_network(self):
 
         def discount_reward(rewards):
-            discounted_reward = np.zeros(rewards)
+            discounted_reward = np.zeros_like(rewards)
             running_add = 0
             for _ in reversed(range(len(rewards))):
                 running_add = running_add * 0.99 + rewards[_]
                 discounted_reward[_] = running_add
             return discounted_reward
-
         Rod_dis_reward = discount_reward(self.db.train_DB['Rod_R'])
         Rod_values = self.Rod_net.critic.predict(np.array(self.db.train_DB['S']))
         Rod_advantages = Rod_dis_reward - np.reshape(Rod_values, len(Rod_values))
@@ -468,7 +470,7 @@ class A3Cagent(threading.Thread):
                 self.run_cns(iter_cns)
                 self.update_parameter()
                 self.db.add_now_state(Now_S=self.state)
-                self.db.train_DB['Step'].append(len(self.db.train_DB['Step']) * iter_cns)
+                self.db.train_DB['Step'] += iter_cns
 
             # 2. 반복 수행 시작
             while True:
@@ -491,8 +493,11 @@ class A3Cagent(threading.Thread):
 
                 # 2.2 제어 정보와, 상태에 대한 정보를 저장한다.
                 self.save_state['Rod_A'] = -1 if Rod_A == 2 else Rod_A
-                self.save_state['Tur_A'] = -1 if Tur_A == 2 else Tur_A
-                self.save_state['time'] = self.db.train_DB['Step'][-1]
+                if self.Netbreak_condition == 1:
+                    self.save_state['Tur_A'] = -1 if Tur_A == 2 else Tur_A
+                else:
+                    self.save_state['Tur_A'] = 0
+                self.save_state['time'] = self.db.train_DB['Step']
                 self.db.save_state(self.save_state)
 
                 # 2.3 제어에 대하여 CNS 동작 시키고 현재 상태 업데이트한다.
@@ -504,7 +509,7 @@ class A3Cagent(threading.Thread):
                 # 2.5 평가를 저장한다.
                 self.db.add_train_DB(S=old_state, R_R=Rod_R, R_A=Rod_A, T_R=Tur_R, T_A=Tur_A)
                 # 2.5 기타 변수를 업데이트 한다.
-                self.db.train_DB['Step'].append(len(self.db.train_DB['Step']) * iter_cns)
+                self.db.train_DB['Step'] += iter_cns
 
                 # 2.6 일정 시간 마다 네트워크를 업데이트 한다. 또는 죽으면 update 한다.
                 if self.db.train_DB['Up_t'] >= self.db.train_DB['Up_t_end'] or done:
@@ -517,16 +522,21 @@ class A3Cagent(threading.Thread):
                 if done:
                     episode += 1
                     # tensorboard update
-                    stats = [self.db.train_DB['TotR'][-1],
+                    if self.db.train_DB['T_Avg_q_max'] == 0:
+                        out_ = 0
+                    else:
+                        out_ = self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step']
+
+                    stats = [self.db.train_DB['TotR'],
                              self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
-                             self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step'],
-                             self.db.train_DB['Step'][-1]]
+                             out_,
+                             self.db.train_DB['Step']]
                     for i in range(len(stats)):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
                     self.summary_writer.add_summary(summary_str, episode)
-                    if self.db.train_DB['Step'][-1] > 50:
-                        self.draw_img(current_ep=episode)
+                    if self.db.train_DB['Step'] > 300:
+                        self.db.draw_img(current_ep=episode)
                     # DB initial
                     self.db.initial_train_DB()
                     self.CNS.init_cns()
@@ -536,30 +546,30 @@ class A3Cagent(threading.Thread):
 
 class DB:
     def __init__(self):
-        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [], 'Tur_R': [], 'Tur_A': [],
-                         'Save_R_R': [], 'Save_R_A': [], 'Save_T_R': [], 'Save_T_A': [],
-                         'TotR': [], 'Step': [],
+        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [],
+                         'Tur_R': [], 'Tur_A': [],
+                         'TotR': 0, 'Step': 0,
                          'R_Avg_q_max': 0, 'R_Avg_max_step': 0,
                          'T_Avg_q_max': 0, 'T_Avg_max_step': 0,
-                         'Up_t':0, 'Up_t_end': 100}
+                         'Up_t': 0, 'Up_t_end': 60}
         self.gp_db = pd.DataFrame()
-        self.fig = plt.figure(constrained_layout=True, figsize=(13, 10))
-        self.gs = self.fig.add_gridspec(13, 3)
+        self.fig = plt.figure(constrained_layout=True, figsize=(14, 10))
+        self.gs = self.fig.add_gridspec(14, 3)
         self.axs = [self.fig.add_subplot(self.gs[0:3, :]),
                     self.fig.add_subplot(self.gs[3:6, :]),
-                    self.fig.add_subplot(self.gs[6:8, :]),
+                    self.fig.add_subplot(self.gs[6:7, :]),
+                    self.fig.add_subplot(self.gs[7:8, :]),
                     self.fig.add_subplot(self.gs[8:9, :]),
-                    self.fig.add_subplot(self.gs[9:10, :]),
-                    self.fig.add_subplot(self.gs[10:13, :]),
+                    self.fig.add_subplot(self.gs[9:14, :]),
                     ]
 
     def initial_train_DB(self):
-        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [], 'Tur_R': [], 'Tur_A': [],
-                         'Save_R_R': [], 'Save_R_A': [], 'Save_T_R': [], 'Save_T_A': [],
-                         'TotR': [], 'Step': [],
+        self.train_DB = {'Now_S': [], 'S': [], 'Rod_R': [], 'Rod_A': [],
+                         'Tur_R': [], 'Tur_A': [],
+                         'TotR': 0, 'Step': 0,
                          'R_Avg_q_max': 0, 'R_Avg_max_step': 0,
                          'T_Avg_q_max': 0, 'T_Avg_max_step': 0,
-                         'Up_t':0, 'Up_t_end': 100}
+                         'Up_t': 0, 'Up_t_end': 60}
         self.gp_db = pd.DataFrame()
 
     def initial_each_trian_DB(self):
@@ -572,14 +582,14 @@ class DB:
     def add_train_DB(self, S, R_R, R_A, T_R, T_A):
         self.train_DB['S'].append(S)
         self.train_DB['Rod_R'].append(R_R)
-        self.train_DB['Save_R_R'].append(R_R)
-        self.train_DB['Rod_A'].append(R_A)
-        self.train_DB['Save_R_A_R'].append(R_A)
+        Temp_R_A = np.zeros(3)
+        Temp_R_A[R_A] = 1
+        self.train_DB['Rod_A'].append(Temp_R_A)
+        Temp_T_A = np.zeros(3)
+        Temp_T_A[T_A] = 1
         self.train_DB['Tur_R'].append(T_R)
-        self.train_DB['Save_T_R'].append(T_R)
-        self.train_DB['Tur_A'].append(T_A)
-        self.train_DB['Save_T_A'].append(T_A)
-        self.train_DB['Step'].append(len(self.train_DB['Step']))
+        self.train_DB['Tur_A'].append(Temp_T_A)
+
         self.train_DB['TotR'] += self.train_DB['Rod_R'][-1] + self.train_DB['Tur_R'][-1]
 
     def save_state(self, save_data_dict):
@@ -590,17 +600,19 @@ class DB:
 
     def draw_img(self, current_ep):
         for _ in self.axs:
-            _.clean()
+            _.clear()
         #
-        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power'], 'g')
-        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_up'], 'b')
-        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_low'], 'r')
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power'], 'g', label='Power')
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_up'], 'b', label='Power_hi_bound')
+        self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_low'], 'r', label='Power_low_bound')
+        self.axs[0].legend(loc=7, fontsize=5)
         self.axs[0].set_ylabel('Reactor Power [%]')
         self.axs[0].grid()
         #
-        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe'], 'g')
-        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b')
-        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe'], 'g', label='Mwe')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b', label='Mwe_hi_bound')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r', label='Mwe_low_bound')
+        self.axs[1].legend(loc=7, fontsize=5)
         self.axs[1].set_ylabel('Electrical Power [MWe]')
         self.axs[1].grid()
         #
@@ -636,7 +648,7 @@ class DB:
         self.axs[5].set_yticks((0, 1))
         self.axs[5].set_yticklabels(('Off', 'On'))
         self.axs[5].set_xlabel('Time [s]')
-        self.axs[5].legend()
+        self.axs[5].legend(loc=7, fontsize=5)
         self.axs[5].grid()
         #
         self.fig.savefig(fname='{}/img/{}.png'.format(MAKE_FILE_PATH, current_ep), dpi=600, facecolor=None)

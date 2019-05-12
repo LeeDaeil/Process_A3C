@@ -43,7 +43,7 @@ class MainModel:
         for i in range(0, 20):
             self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
                                         Remote_port=7100 + i,
-                                        CNS_ip='192.168.0.2',
+                                        CNS_ip='192.168.0.9',
                                         CNS_port=7000 + i,
                                         Shared_actor_net=self.actor,
                                         Shared_cric_net=self.critic,
@@ -57,7 +57,7 @@ class MainModel:
         for i in range(0, 20):
             self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
                                         Remote_port=7200 + i,
-                                        CNS_ip='192.168.0.11',
+                                        CNS_ip='192.168.0.7',
                                         CNS_port=7000 + i,
                                         Shared_actor_net=self.actor,
                                         Shared_cric_net=self.critic,
@@ -71,7 +71,7 @@ class MainModel:
         for i in range(0, 20):
             self.worker.append(A3Cagent(Remote_ip='192.168.0.10',
                                         Remote_port=7300 + i,
-                                        CNS_ip='192.168.0.13',
+                                        CNS_ip='192.168.0.4',
                                         CNS_port=7000 + i,
                                         Shared_actor_net=self.actor,
                                         Shared_cric_net=self.critic,
@@ -246,7 +246,7 @@ class A3Cagent(threading.Thread):
         self.step = 0
 
         self.update_t = 0
-        self.update_t_limit = 800
+        self.update_t_limit = 10
 
         self.input_dim = 1
         self.input_number = 6
@@ -592,7 +592,7 @@ class A3Cagent(threading.Thread):
         values = np.reshape(values, len(values))
 
         advantages = discounted_rewards - values
-
+        print(np.shape(self.states), np.shape(self.actions), np.shape(advantages), )
         self.optimizer[0]([self.states, self.actions, advantages])
         self.optimizer[1]([self.states, discounted_rewards])
         self.states, self.actions, self.rewards = [], [], []
