@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_10_LSTM'
+MAKE_FILE_PATH = './VER_11_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -359,10 +359,10 @@ class A3Cagent(threading.Thread):
             elif self.Turbine_setpoint >= 1780:
                 self.send_action_append(['KSWO213'], [0])
         # 1) 출력 4% 이상에서 터빈 acc 를 200 이하로 맞춘다.
-        if self.Reactor_power >= 0.04 and self.Turbine_ac != 200:
-            if self.Turbine_ac < 190:
+        if self.Reactor_power >= 0.04 and self.Turbine_ac != 250:
+            if self.Turbine_ac < 240:
                 self.send_action_append(['KSWO215'], [1])
-            elif self.Turbine_ac >= 190:
+            elif self.Turbine_ac >= 240:
                 self.send_action_append(['KSWO215'], [0])
         # 2) 출력 10% 이상에서는 Trip block 우회한다.
         if self.Reactor_power >= 0.10 and self.trip_block != 1:
@@ -535,7 +535,7 @@ class A3Cagent(threading.Thread):
                         self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
                     summary_str = self.sess.run(self.summary_op)
                     self.summary_writer.add_summary(summary_str, episode)
-                    if self.db.train_DB['Step'] > 300:
+                    if self.db.train_DB['Step'] > 500:
                         self.db.draw_img(current_ep=episode)
                     # DB initial
                     self.db.initial_train_DB()
@@ -735,7 +735,10 @@ class CNS:
         self.send_sock.sendto(buffer, (self.CNS_ip, self.CNS_port))
 
     def run_cns(self):
-        return self._send_control_signal(['KFZRUN'], [3])
+        if self.mem['KBCDO19']['Val'] >= 1780 and self.mem['KLAMPO224']['Val'] == 0:
+            return self._send_control_signal(['KFZRUN', 'KSWO244'], [3, 1])
+        else:
+            return self._send_control_signal(['KFZRUN'], [3])
 
     def init_cns(self):
         # UDP 통신에 쌇인 데이터를 새롭게 하는 기능
