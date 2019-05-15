@@ -285,9 +285,14 @@ class A3Cagent(threading.Thread):
         if True:
             # 원자로 출력 값을 사용하여 최대 최소 바운더리의 값을 구함.
             base_condition = self.Time_tick / (30000 / self.operation_mode)
-            self.up_condition = base_condition + 0.03
             self.stady_condition = base_condition + 0.02
-            self.low_condition = base_condition + 0.01
+
+            # self.stady_condition = base_condition + 0.02
+            up_base_condition = (self.Time_tick * 53) / 1470000
+            self.up_condition = up_base_condition + 0.04
+
+            low_base_condition = (self.Time_tick * 3) / 98000    #(30000 / self.operation_mode)
+            self.low_condition = low_base_condition # + 0.01
 
             self.distance_up = self.up_condition - self.Reactor_power
             self.distance_low = self.Reactor_power - self.low_condition
@@ -319,7 +324,7 @@ class A3Cagent(threading.Thread):
             'CNS_time': self.Time_tick, 'Reactor_power': self.Reactor_power * 100,
             'Reactor_power_up': self.up_condition * 100, 'Reactor_power_low': self.low_condition * 100,
 
-            'Mwe': self.Mwe_power, 'Mwe_up': self.up_condition * 1000, 'Mwe_low':self.low_condition * 1000,
+            'Mwe': self.Mwe_power, 'Mwe_up': self.up_condition * 950, 'Mwe_low':self.low_condition * 950,
             'Turbine_set': self.Turbine_setpoint, 'Turbine_ac': self.Turbine_ac,
             'Turbine_real': self.Turbine_real, 'Load_set': self.load_set,
             'Load_rate': self.load_rate,
@@ -367,11 +372,11 @@ class A3Cagent(threading.Thread):
         # 2) 출력 10% 이상에서는 Trip block 우회한다.
         if self.Reactor_power >= 0.10 and self.trip_block != 1:
             self.send_action_append(['KSWO22', 'KSWO21'], [1, 1])
-        # 2) 출력 10% 이상에서는 터빈 load를 150 Mwe 까지, rate를 20까지 맞춘다.
-        if self.Reactor_power >= 0.10 and self.Mwe_power <= 0:
-            if self.load_set < 150: self.send_action_append(['KSWO225'], [1])
-            else: self.send_action_append(['KSWO225'], [0])
-            if self.load_rate < 20: self.send_action_append(['KSWO227'], [1])
+        # 2) 출력 10% 이상에서는 rate를 50까지 맞춘다.
+        if self.Reactor_power >= 0.10: # and self.Mwe_power <= 0:
+            # if self.load_set < 150: self.send_action_append(['KSWO225'], [1]) 터빈 load를 150 Mwe 까지,
+            # else: self.send_action_append(['KSWO225'], [0])
+            if self.load_rate < 50: self.send_action_append(['KSWO227'], [1])
             else: self.send_action_append(['KSWO225'], [0])
         # 3) 출력 15% 이상 및 터빈 rpm이 1800이 되면 netbreak 한다.
         if self.Reactor_power >= 0.15 and self.Turbine_real >= 1790 and self.Netbreak_condition != 1:
@@ -390,7 +395,7 @@ class A3Cagent(threading.Thread):
             self.send_action_append(['KSWO193'], [1])
         # 7) 출력 50% 이상 및 전기 출력이 475Mwe
         if self.Reactor_power >= 0.50 and self.Mwe_power >= 475 and self.cond_pump_3 == 0:
-            self.send_action_append(['KSWO206'],[1])
+            self.send_action_append(['KSWO206'], [1])
         # 8) 출력 80% 이상 및 전기 출력이 765Mwe
         if self.Reactor_power >= 0.80 and self.Mwe_power >= 765 and self.main_feed_pump_3 == 0:
             self.send_action_append(['KSWO192'], [1])
@@ -402,9 +407,10 @@ class A3Cagent(threading.Thread):
 
         # 10) 터빈 load 제어 신호 보내기
         if self.Netbreak_condition == 1:
-            if T_A == 0: self.send_action_append(['KSWO227', 'KSWO226'], [0, 0])  # Stay
-            elif T_A == 1: self.send_action_append(['KSWO227', 'KSWO226'], [1, 0])  # up
-            elif T_A == 2: self.send_action_append(['KSWO227', 'KSWO226'], [0, 1])  # down
+            if T_A == 0: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])  # Stay
+            elif T_A == 1: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0])  # up
+            elif T_A == 2: self.send_action_append(['KSWO225', 'KSWO224'], [0, 1])  # down
+
         self.CNS._send_control_signal(self.para, self.val)
 
     def get_reward_done(self):
@@ -612,6 +618,7 @@ class DB:
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe'], 'g', label='Mwe')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b', label='Mwe_hi_bound')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r', label='Mwe_low_bound')
+        self.axs[1].plot(self.gp_db['time'], self.gp_db['Turbine_set'], 'r', label='Set_point')
         self.axs[1].legend(loc=7, fontsize=5)
         self.axs[1].set_ylabel('Electrical Power [MWe]')
         self.axs[1].grid()
