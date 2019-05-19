@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_17_LSTM'
+MAKE_FILE_PATH = './VER_21_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -253,8 +253,7 @@ class A3Cagent(threading.Thread):
 
         # CNS와 통신과 데이터 교환이 가능한 모듈 호출
         self.CNS = CNS(self.name, CNS_ip, CNS_port, Remote_ip, Remote_port)
-        # 사용되는 입력 파라메터 업데이트
-        self.update_parameter()
+
 
         # 네트워크 정보
         if True:
@@ -280,6 +279,9 @@ class A3Cagent(threading.Thread):
             # 보상이나 상태를 저장하는 부분
             self.db = DB()
             self.db.initial_train_DB()
+
+        # 사용되는 입력 파라메터 업데이트
+        self.update_parameter()
 
     def update_parameter(self):
 
@@ -316,11 +318,18 @@ class A3Cagent(threading.Thread):
             self.db.train_DB['Net_triger'] = True
             if len(self.db.train_DB['Net_triger_time']) == 0:
                 self.db.train_DB['Net_triger_time'].append(self.Time_tick)
-        if self.db.train_DB['Net_triger']:
-            self.tur_stady_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (93 / 300)
-            self.tur_low_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (83 / 300) - 5
-            self.tur_hi_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (73 / 300) + 5
 
+        if self.db.train_DB['Net_triger']:
+            self.tur_stady_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (93 / 500)
+            self.tur_low_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (73 / 500) - 50
+            if self.tur_low_condition <= 0:
+                self.tur_low_condition = 0
+            self.tur_hi_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (83 / 500) + 50
+        else:
+            self.tur_stady_condition, self.tur_low_condition, self.tur_hi_condition = 0, 0, 0
+
+        self.distance_tur_up = self.tur_hi_condition - self.Mwe_power
+        self.distance_tur_low = self.Mwe_power - self.tur_low_condition
 
 
         self.steam_dump_condition = self.CNS.mem['KLAMPO150']['Val'] # 0: auto 1: man
@@ -334,7 +343,7 @@ class A3Cagent(threading.Thread):
 
         self.state =[
             self.Reactor_power, self.distance_up, self.distance_low, self.stady_condition, self.Mwe_power/1000,
-            self.tur_hi_condition / 1000, self.tur_low_condition / 1000, self.tur_stady_condition / 1000,
+            self.distance_tur_up / 1000, self.distance_tur_low / 1000, self.tur_stady_condition / 1000,
             self.load_rate/100
         ]
 
@@ -382,10 +391,10 @@ class A3Cagent(threading.Thread):
             elif self.Turbine_setpoint >= 1750:
                 self.send_action_append(['KSWO213'], [0])
         # 1) 출력 4% 이상에서 터빈 acc 를 200 이하로 맞춘다.
-        if self.Reactor_power >= 0.04 and self.Turbine_ac != 230:
-            if self.Turbine_ac < 220:
+        if self.Reactor_power >= 0.04 and self.Turbine_ac != 210:
+            if self.Turbine_ac < 200:
                 self.send_action_append(['KSWO215'], [1])
-            elif self.Turbine_ac >= 220:
+            elif self.Turbine_ac >= 200:
                 self.send_action_append(['KSWO215'], [0])
         # 2) 출력 10% 이상에서는 Trip block 우회한다.
         if self.Reactor_power >= 0.10 and self.trip_block != 1:
@@ -472,16 +481,21 @@ class A3Cagent(threading.Thread):
 
         if self.Netbreak_condition == 1:
             if self.Mwe_power > self.tur_stady_condition:
-                Tur_R = self.tur_hi_condition - self.Mwe_power
+                Tur_R = (self.tur_hi_condition - self.Mwe_power)/1000
             else:
-                Tur_R = self.Mwe_power - self.tur_low_condition
+                Tur_R = (self.Mwe_power - self.tur_low_condition)/1000
+        else:
+            Tur_R = 0
 
-        if Rod_R < 0 or self.db.train_DB['Step'] >= 3000:
+        if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
             done = True
         else:
             done = False
 
-        return done, Rod_R, Tur_R / 1000
+        if self.db.train_DB['Step'] >= 1000 and self.Mwe_power < 10:
+            done = True
+
+        return done, Rod_R, Tur_R
 
     def train_network(self):
 
@@ -623,7 +637,7 @@ class DB:
                          'R_Avg_q_max': 0, 'R_Avg_max_step': 0,
                          'T_Avg_q_max': 0, 'T_Avg_max_step': 0,
                          'Up_t': 0, 'Up_t_end': 60,
-                         'Net_triger': False}
+                         'Net_triger': False, 'Net_triger_time': []}
         self.gp_db = pd.DataFrame()
 
     def initial_each_trian_DB(self):
@@ -661,7 +675,7 @@ class DB:
         self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power'], 'g', label='Power')
         self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_up'], 'b', label='Power_hi_bound')
         self.axs[0].plot(self.gp_db['time'], self.gp_db['Reactor_power_low'], 'r', label='Power_low_bound')
-        self.axs[0].legend(loc=7, fontsize=5)
+        self.axs[0].legend(loc=2, fontsize=5)
         self.axs[0].set_ylabel('Reactor Power [%]')
         self.axs[0].grid()
         #
@@ -670,7 +684,7 @@ class DB:
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r', label='Mwe_low_bound')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Load_set'], 'm', label='Set_point')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Load_rate'], 'y', label='Load_rate')
-        self.axs[1].legend(loc=7, fontsize=5)
+        self.axs[1].legend(loc=2, fontsize=5)
         self.axs[1].set_ylabel('Electrical Power [MWe]')
         self.axs[1].grid()
         #
@@ -709,8 +723,9 @@ class DB:
         self.axs[5].legend(loc=7, fontsize=5)
         self.axs[5].grid()
         #
-        self.fig.savefig(fname='{}/img/{}.png'.format(MAKE_FILE_PATH, current_ep), dpi=600, facecolor=None)
-        self.gp_db.to_csv('{}/log/{}.csv'.format(MAKE_FILE_PATH, current_ep))
+        self.fig.savefig(fname='{}/img/{}_{}.png'.format(MAKE_FILE_PATH, self.train_DB['Step'], current_ep), dpi=600,
+                         facecolor=None)
+        self.gp_db.to_csv('{}/log/{}_{}.csv'.format(MAKE_FILE_PATH, self.train_DB['Step'], current_ep))
 
 
 class CNS:
