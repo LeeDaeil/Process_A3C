@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_21_LSTM'
+MAKE_FILE_PATH = './VER_29_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -288,6 +288,13 @@ class A3Cagent(threading.Thread):
         # 사용되는 파라메터 전체 업데이트
         self.Time_tick = self.CNS.mem['KCNTOMS']['Val']
         self.Reactor_power = self.CNS.mem['QPROREL']['Val']
+        self.TRIP_SIG = self.CNS.mem['KLAMPO9']['Val']
+        self.charging_valve_state = self.CNS.mem['KLAMPO95']['Val']
+        self.main_feed_valve_1_state = self.CNS.mem['KLAMPO147']['Val']
+        self.main_feed_valve_2_state = self.CNS.mem['KLAMPO148']['Val']
+        self.main_feed_valve_3_state = self.CNS.mem['KLAMPO149']['Val']
+        self.vct_level = self.CNS.mem['ZVCT']['Val']
+        self.pzr_level = self.CNS.mem['ZINST63']['Val']
 
         if True:
             # 원자로 출력 값을 사용하여 최대 최소 바운더리의 값을 구함.
@@ -320,11 +327,11 @@ class A3Cagent(threading.Thread):
                 self.db.train_DB['Net_triger_time'].append(self.Time_tick)
 
         if self.db.train_DB['Net_triger']:
-            self.tur_stady_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (93 / 500)
-            self.tur_low_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (73 / 500) - 50
+            self.tur_stady_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (2 / 25)
+            self.tur_low_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (2 / 25) - 50
             if self.tur_low_condition <= 0:
                 self.tur_low_condition = 0
-            self.tur_hi_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (83 / 500) + 50
+            self.tur_hi_condition = (self.Time_tick - self.db.train_DB['Net_triger_time'][0]) * (2 / 25) + 50
         else:
             self.tur_stady_condition, self.tur_low_condition, self.tur_hi_condition = 0, 0, 0
 
@@ -344,7 +351,7 @@ class A3Cagent(threading.Thread):
         self.state =[
             self.Reactor_power, self.distance_up, self.distance_low, self.stady_condition, self.Mwe_power/1000,
             self.distance_tur_up / 1000, self.distance_tur_low / 1000, self.tur_stady_condition / 1000,
-            self.load_rate/100
+            self.load_set/100
         ]
 
         self.save_state = {
@@ -360,6 +367,8 @@ class A3Cagent(threading.Thread):
             'Stem_pump': self.steam_dump_condition, 'Heat_pump': self.heat_drain_pump_condition,
             'MF1': self.main_feed_pump_1, 'MF2': self.main_feed_pump_2, 'MF3': self.main_feed_pump_3,
             'CF1': self.cond_pump_1, 'CF2': self.cond_pump_2, 'CF3': self.cond_pump_3,
+
+            'PZR_level': self.pzr_level, 'VCT_level': self.vct_level,
         }
 
     def run_cns(self, i):
@@ -383,6 +392,12 @@ class A3Cagent(threading.Thread):
         self.para = []
         self.val = []
 
+        # 주급수 및 CVCS 자동
+        if self.charging_valve_state == 1:
+            self.send_action_append(['KSWO100'], [0])
+        if self.main_feed_valve_1_state == 1 or self.main_feed_valve_2_state == 1 or self.main_feed_valve_3_state == 1:
+            self.send_action_append(['KSWO171', 'KSWO165', 'KSWO159'], [0, 0, 0])
+
         # 절차서 구성 순서로 진행
         # 1) 출력이 4% 이상에서 터빈 set point를 맞춘다.
         if self.Reactor_power >= 0.04 and self.Turbine_setpoint != 1800:
@@ -405,30 +420,59 @@ class A3Cagent(threading.Thread):
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
             if self.load_rate < 50: self.send_action_append(['KSWO227', 'KSWO226'], [1, 0])
             else: self.send_action_append(['KSWO227', 'KSWO226'], [0, 0])
-        if 100 <= self.Mwe_power < 200:
+
+        if 0.10 <= self.Reactor_power < 0.20:
+            if self.load_set < 100: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+            else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        if 0.200 <= self.Reactor_power < 0.300:
             if self.load_set < 200: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 200 <= self.Mwe_power < 300:
+        if 0.300 <= self.Reactor_power < 0.400:
             if self.load_set < 300: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 300 <= self.Mwe_power < 400:
+        if 0.400 <= self.Reactor_power < 0.500:
             if self.load_set < 400: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 400 <= self.Mwe_power < 500:
+        if 0.500 <= self.Reactor_power < 0.600:
             if self.load_set < 500: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 500 <= self.Mwe_power < 600:
+        if 0.600 <= self.Reactor_power < 0.700:
             if self.load_set < 600: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 600 <= self.Mwe_power < 700:
+        if 0.700 <= self.Reactor_power < 0.800:
             if self.load_set < 700: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 700 <= self.Mwe_power < 800:
+        if 0.800 <= self.Reactor_power < 0.900:
             if self.load_set < 800: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 800 <= self.Mwe_power < 900:
+        if 0.900 <= self.Reactor_power < 1.100:
             if self.load_set < 900: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        #
+        # if 100 <= self.Mwe_power < 200:
+        #     if self.load_set < 200: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 200 <= self.Mwe_power < 300:
+        #     if self.load_set < 300: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 300 <= self.Mwe_power < 400:
+        #     if self.load_set < 400: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 400 <= self.Mwe_power < 500:
+        #     if self.load_set < 500: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 500 <= self.Mwe_power < 600:
+        #     if self.load_set < 600: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 600 <= self.Mwe_power < 700:
+        #     if self.load_set < 700: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 700 <= self.Mwe_power < 800:
+        #     if self.load_set < 800: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
+        # if 800 <= self.Mwe_power < 900:
+        #     if self.load_set < 900: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
 
             # if self.load_set <= (self.stady_condition * 950):
             #     self.send_action_append(['KSWO225', 'KSWO224'], [1, 0])
@@ -464,12 +508,13 @@ class A3Cagent(threading.Thread):
 
         # 10) 터빈 load 제어 신호 보내기
         if self.Netbreak_condition == 1:
-            if T_A == 0: self.send_action_append(['KSWO227', 'KSWO226'], [0, 0])  # Stay
-            elif T_A == 1: self.send_action_append(['KSWO227', 'KSWO226'], [1, 0])  # up
-            elif T_A == 2: self.send_action_append(['KSWO227', 'KSWO226'], [0, 1])  # down
-            # if T_A == 0: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])  # Stay
-            # elif T_A == 1: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0])  # up
-            # elif T_A == 2: self.send_action_append(['KSWO225', 'KSWO224'], [0, 1])  # down
+            pass
+        #     if T_A == 0: self.send_action_append(['KSWO227', 'KSWO226'], [0, 0])  # Stay
+        #     elif T_A == 1: self.send_action_append(['KSWO227', 'KSWO226'], [1, 0])  # up
+        #     elif T_A == 2: self.send_action_append(['KSWO227', 'KSWO226'], [0, 1])  # down
+        #     if T_A == 0: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])  # Stay
+        #     elif T_A == 1: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0])  # up
+        #     elif T_A == 2: self.send_action_append(['KSWO225', 'KSWO224'], [0, 1])  # down
 
         self.CNS._send_control_signal(self.para, self.val)
 
@@ -487,12 +532,13 @@ class A3Cagent(threading.Thread):
         else:
             Tur_R = 0
 
-        if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
+        # if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
+        if Rod_R < 0 or self.db.train_DB['Step'] >= 5000:
             done = True
         else:
             done = False
 
-        if self.db.train_DB['Step'] >= 1000 and self.Mwe_power < 10:
+        if self.db.train_DB['Step'] >= 700 and self.Mwe_power < 1:
             done = True
 
         return done, Rod_R, Tur_R
@@ -530,7 +576,7 @@ class A3Cagent(threading.Thread):
         iter_cns = 2    # 반복
 
         # 훈련 시작하는 부분
-        while episode < 20000:
+        while episode < 20000 and self.TRIP_SIG == 0:
             # 1. input_time_length 까지 데이터 수집 (10번)
             for i in range(0, self.input_time_length):
                 self.run_cns(iter_cns)
@@ -586,28 +632,31 @@ class A3Cagent(threading.Thread):
 
                 # 2.7 done에 도달함.
                 if done:
-                    episode += 1
-                    # tensorboard update
-                    if self.db.train_DB['T_Avg_q_max'] == 0:
-                        out_ = 0
+                    if self.TRIP_SIG == 1:
+                        break
                     else:
-                        out_ = self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step']
+                        episode += 1
+                        # tensorboard update
+                        if self.db.train_DB['T_Avg_q_max'] == 0:
+                            out_ = 0
+                        else:
+                            out_ = self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step']
 
-                    stats = [self.db.train_DB['TotR'], self.db.train_DB['TotR_Rod'], self.db.train_DB['TotR_Tur'],
-                             self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
-                             out_,
-                             self.db.train_DB['Step']]
-                    for i in range(len(stats)):
-                        self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
-                    summary_str = self.sess.run(self.summary_op)
-                    self.summary_writer.add_summary(summary_str, episode)
-                    if self.db.train_DB['Step'] > 500:
-                        self.db.draw_img(current_ep=episode)
-                    # DB initial
-                    self.db.initial_train_DB()
-                    self.CNS.init_cns()
-                    sleep(2)
-                    break
+                        stats = [self.db.train_DB['TotR'], self.db.train_DB['TotR_Rod'], self.db.train_DB['TotR_Tur'],
+                                 self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
+                                 out_,
+                                 self.db.train_DB['Step']]
+                        for i in range(len(stats)):
+                            self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
+                        summary_str = self.sess.run(self.summary_op)
+                        self.summary_writer.add_summary(summary_str, episode)
+                        if self.db.train_DB['Step'] > 600:
+                            self.db.draw_img(current_ep=episode)
+                        # DB initial
+                        self.db.initial_train_DB()
+                        self.CNS.init_cns()
+                        sleep(2)
+                        break
 
 
 class DB:
@@ -622,12 +671,13 @@ class DB:
         self.gp_db = pd.DataFrame()
         self.fig = plt.figure(constrained_layout=True, figsize=(14, 10))
         self.gs = self.fig.add_gridspec(14, 3)
-        self.axs = [self.fig.add_subplot(self.gs[0:3, :]),
-                    self.fig.add_subplot(self.gs[3:6, :]),
-                    self.fig.add_subplot(self.gs[6:7, :]),
-                    self.fig.add_subplot(self.gs[7:8, :]),
-                    self.fig.add_subplot(self.gs[8:9, :]),
-                    self.fig.add_subplot(self.gs[9:14, :]),
+        self.axs = [self.fig.add_subplot(self.gs[0:3, :]),  # 1
+                    self.fig.add_subplot(self.gs[3:6, :]),  # 2
+                    self.fig.add_subplot(self.gs[6:7, :]),  # 3
+                    self.fig.add_subplot(self.gs[7:8, :]),  # 4
+                    self.fig.add_subplot(self.gs[8:10, :]),  # 5
+                    self.fig.add_subplot(self.gs[10:12, :]),  # 6
+                    self.fig.add_subplot(self.gs[12:14, :]), # 7
                     ]
 
     def initial_train_DB(self):
@@ -680,8 +730,8 @@ class DB:
         self.axs[0].grid()
         #
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe'], 'g', label='Mwe')
-        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b', label='Mwe_hi_bound')
-        self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r', label='Mwe_low_bound')
+        # self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_up'], 'b', label='Mwe_hi_bound')
+        # self.axs[1].plot(self.gp_db['time'], self.gp_db['Mwe_low'], 'r', label='Mwe_low_bound')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Load_set'], 'm', label='Set_point')
         self.axs[1].plot(self.gp_db['time'], self.gp_db['Load_rate'], 'y', label='Load_rate')
         self.axs[1].legend(loc=2, fontsize=5)
@@ -701,27 +751,33 @@ class DB:
         self.axs[3].set_ylabel('Rod Control')
         self.axs[3].grid()
         #
-        self.axs[4].plot(self.gp_db['time'], self.gp_db['Tur_A'], 'black')
-        self.axs[4].set_yticks((-1, 0, 1))
-        self.axs[4].set_yticklabels(('In', 'Stay', 'Out'))
-        self.axs[4].set_ylabel('Turbine Control')
+        self.axs[4].plot(self.gp_db['time'], self.gp_db['VCT_level'], 'black')
+        # self.axs[4].set_yticks((-1, 0, 1))
+        # self.axs[4].set_yticklabels(('In', 'Stay', 'Out'))
+        self.axs[4].set_ylabel('VCT_level')
         self.axs[4].grid()
         #
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['Net_break'], label='Net break')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['Trip_block'], label='Trip block')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['Stem_pump'], label='Stem dump valve auto')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['Heat_pump'], label='Heat pump')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF1'], label='Main Feed Water Pump 1')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF2'], label='Main Feed Water Pump 2')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['MF3'], label='Main Feed Water Pump 3')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF1'], label='Condensor Pump 1')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF2'], label='Condensor Pump 2')
-        self.axs[5].plot(self.gp_db['time'], self.gp_db['CF3'], label='Condensor Pump 3')
-        self.axs[5].set_yticks((0, 1))
-        self.axs[5].set_yticklabels(('Off', 'On'))
-        self.axs[5].set_xlabel('Time [s]')
-        self.axs[5].legend(loc=7, fontsize=5)
+        self.axs[5].plot(self.gp_db['time'], self.gp_db['PZR_level'], 'black')
+        # self.axs[4].set_yticks((-1, 0, 1))
+        # self.axs[4].set_yticklabels(('In', 'Stay', 'Out'))
+        self.axs[5].set_ylabel('PZR_level')
         self.axs[5].grid()
+        #
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['Net_break'], label='Net break')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['Trip_block'], label='Trip block')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['Stem_pump'], label='Stem dump valve auto')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['Heat_pump'], label='Heat pump')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['MF1'], label='Main Feed Water Pump 1')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['MF2'], label='Main Feed Water Pump 2')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['MF3'], label='Main Feed Water Pump 3')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['CF1'], label='Condensor Pump 1')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['CF2'], label='Condensor Pump 2')
+        self.axs[6].plot(self.gp_db['time'], self.gp_db['CF3'], label='Condensor Pump 3')
+        self.axs[6].set_yticks((0, 1))
+        self.axs[6].set_yticklabels(('Off', 'On'))
+        self.axs[6].set_xlabel('Time [s]')
+        self.axs[6].legend(loc=7, fontsize=5)
+        self.axs[6].grid()
         #
         self.fig.savefig(fname='{}/img/{}_{}.png'.format(MAKE_FILE_PATH, self.train_DB['Step'], current_ep), dpi=600,
                          facecolor=None)
