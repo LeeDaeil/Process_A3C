@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_29_LSTM'
+MAKE_FILE_PATH = './VER_33_LSTM'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -42,8 +42,8 @@ class MainModel:
         global TEST_NETWORK
         self._make_folder()
         self._make_tensorboaed()
-        self.Rod_net = MainNet(net_type='LSTM', input_pa=9, output_pa=3, time_leg=10)
-        self.Turbine_net = MainNet(net_type='LSTM', input_pa=9, output_pa=3, time_leg=10)
+        self.Rod_net = MainNet(net_type='LSTM', input_pa=6, output_pa=3, time_leg=10)
+        self.Turbine_net = MainNet(net_type='LSTM', input_pa=6, output_pa=3, time_leg=10)
         self.test = TEST_NETWORK
 
     def run(self):
@@ -299,14 +299,16 @@ class A3Cagent(threading.Thread):
         if True:
             # 원자로 출력 값을 사용하여 최대 최소 바운더리의 값을 구함.
             base_condition = self.Time_tick / (30000 / self.operation_mode)
+            up_base_condition = (self.Time_tick * 53) / 1470000
+            low_base_condition = (self.Time_tick * 3) / 98000  # (30000 / self.operation_mode)
+
             self.stady_condition = base_condition + 0.02
 
-            # self.stady_condition = base_condition + 0.02
-            up_base_condition = (self.Time_tick * 53) / 1470000
-            self.up_condition = up_base_condition + 0.04
-
-            low_base_condition = (self.Time_tick * 3) / 98000    #(30000 / self.operation_mode)
-            self.low_condition = low_base_condition # + 0.01
+            if self.stady_condition >= 1.00:
+                self.stady_condition, self.up_condition, self.low_condition = 1.00, 1.10, 0.90
+            else:
+                self.up_condition = up_base_condition + 0.04
+                self.low_condition = low_base_condition # + 0.01
 
             self.distance_up = self.up_condition - self.Reactor_power
             self.distance_low = self.Reactor_power - self.low_condition
@@ -350,7 +352,7 @@ class A3Cagent(threading.Thread):
 
         self.state =[
             self.Reactor_power, self.distance_up, self.distance_low, self.stady_condition, self.Mwe_power/1000,
-            self.distance_tur_up / 1000, self.distance_tur_low / 1000, self.tur_stady_condition / 1000,
+            # self.distance_tur_up / 1000, self.distance_tur_low / 1000, self.tur_stady_condition / 1000,
             self.load_set/100
         ]
 
@@ -442,42 +444,12 @@ class A3Cagent(threading.Thread):
         if 0.700 <= self.Reactor_power < 0.800:
             if self.load_set < 700: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 0.800 <= self.Reactor_power < 0.900:
+        if 0.800 <= self.Reactor_power < 0.850:
             if self.load_set < 800: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        if 0.900 <= self.Reactor_power < 1.100:
-            if self.load_set < 900: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
+        if 0.850 <= self.Reactor_power < 1.100:
+            if self.load_set < 930: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
             else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        #
-        # if 100 <= self.Mwe_power < 200:
-        #     if self.load_set < 200: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 200 <= self.Mwe_power < 300:
-        #     if self.load_set < 300: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 300 <= self.Mwe_power < 400:
-        #     if self.load_set < 400: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 400 <= self.Mwe_power < 500:
-        #     if self.load_set < 500: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 500 <= self.Mwe_power < 600:
-        #     if self.load_set < 600: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 600 <= self.Mwe_power < 700:
-        #     if self.load_set < 700: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 700 <= self.Mwe_power < 800:
-        #     if self.load_set < 800: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-        # if 800 <= self.Mwe_power < 900:
-        #     if self.load_set < 900: self.send_action_append(['KSWO225', 'KSWO224'], [1, 0]) # 터빈 load를 150 Mwe 까지,
-        #     else: self.send_action_append(['KSWO225', 'KSWO224'], [0, 0])
-
-            # if self.load_set <= (self.stady_condition * 950):
-            #     self.send_action_append(['KSWO225', 'KSWO224'], [1, 0])
-            # else:
-            #     self.send_action_append(['KSWO225', 'KSWO224'], [0, 1])
 
         # 3) 출력 15% 이상 및 터빈 rpm이 1800이 되면 netbreak 한다.
         if self.Reactor_power >= 0.15 and self.Turbine_real >= 1790 and self.Netbreak_condition != 1:
@@ -533,7 +505,7 @@ class A3Cagent(threading.Thread):
             Tur_R = 0
 
         # if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
-        if Rod_R < 0 or self.db.train_DB['Step'] >= 5000:
+        if Rod_R < 0 or self.db.train_DB['Step'] >= 5000 or self.Reactor_power >= 0.9470:
             done = True
         else:
             done = False
@@ -576,7 +548,7 @@ class A3Cagent(threading.Thread):
         iter_cns = 2    # 반복
 
         # 훈련 시작하는 부분
-        while episode < 20000 and self.TRIP_SIG == 0:
+        while episode < 5000: # and self.TRIP_SIG == 0:
             # 1. input_time_length 까지 데이터 수집 (10번)
             for i in range(0, self.input_time_length):
                 self.run_cns(iter_cns)
@@ -632,31 +604,28 @@ class A3Cagent(threading.Thread):
 
                 # 2.7 done에 도달함.
                 if done:
-                    if self.TRIP_SIG == 1:
-                        break
+                    episode += 1
+                    # tensorboard update
+                    if self.db.train_DB['T_Avg_q_max'] == 0:
+                        out_ = 0
                     else:
-                        episode += 1
-                        # tensorboard update
-                        if self.db.train_DB['T_Avg_q_max'] == 0:
-                            out_ = 0
-                        else:
-                            out_ = self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step']
+                        out_ = self.db.train_DB['T_Avg_q_max'] / self.db.train_DB['T_Avg_max_step']
 
-                        stats = [self.db.train_DB['TotR'], self.db.train_DB['TotR_Rod'], self.db.train_DB['TotR_Tur'],
-                                 self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
-                                 out_,
-                                 self.db.train_DB['Step']]
-                        for i in range(len(stats)):
-                            self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
-                        summary_str = self.sess.run(self.summary_op)
-                        self.summary_writer.add_summary(summary_str, episode)
-                        if self.db.train_DB['Step'] > 600:
-                            self.db.draw_img(current_ep=episode)
-                        # DB initial
-                        self.db.initial_train_DB()
-                        self.CNS.init_cns()
-                        sleep(2)
-                        break
+                    stats = [self.db.train_DB['TotR'], self.db.train_DB['TotR_Rod'], self.db.train_DB['TotR_Tur'],
+                             self.db.train_DB['R_Avg_q_max'] / self.db.train_DB['R_Avg_max_step'],
+                             out_,
+                             self.db.train_DB['Step']]
+                    for i in range(len(stats)):
+                        self.sess.run(self.update_ops[i], feed_dict={self.summary_placeholders[i]: float(stats[i])})
+                    summary_str = self.sess.run(self.summary_op)
+                    self.summary_writer.add_summary(summary_str, episode)
+                    if self.db.train_DB['Step'] > 2000:
+                        self.db.draw_img(current_ep=episode)
+                    # DB initial
+                    self.db.initial_train_DB()
+                    self.CNS.init_cns()
+                    sleep(2)
+                    break
 
 
 class DB:
