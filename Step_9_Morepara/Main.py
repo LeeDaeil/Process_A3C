@@ -168,14 +168,17 @@ class MainNet:
         if net_type == 'DNN':
             state = Input(batch_shape=(None, in_pa))
             shared = Dense(32, input_dim=in_pa, activation='relu', kernel_initializer='glorot_uniform')(state)
-            # shared = Dense(48, activation='relu', kernel_initializer='glorot_uniform')(shared)
+            shared = Dense(64, activation='relu', kernel_initializer='glorot_uniform')(shared)
+            shared = Dense(70, activation='relu', kernel_initializer='glorot_uniform')(shared)
 
         elif net_type == 'CNN' or net_type == 'LSTM' or net_type == 'CLSTM':
             state = Input(batch_shape=(None, time_leg, in_pa))
             if net_type == 'CNN':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
-                shared = MaxPooling1D(pool_size=2)(shared)
+                shared = MaxPooling1D(pool_size=3)(shared)
                 shared = Flatten()(shared)
+                shared = Dense(64)(shared)
+                shared = Dense(70)(shared)
 
             elif net_type == 'LSTM':
                 shared = LSTM(32, activation='relu')(state)
@@ -183,8 +186,9 @@ class MainNet:
 
             elif net_type == 'CLSTM':
                 shared = Conv1D(filters=10, kernel_size=3, strides=1, padding='same')(state)
-                shared = MaxPooling1D(pool_size=2)(shared)
-                shared = LSTM(8)(shared)
+                shared = MaxPooling1D(pool_size=3)(shared)
+                shared = LSTM(32)(shared)
+                shared = Dense(60)(shared)
 
         # ----------------------------------------------------------------------------------------------------
         # Common output network
@@ -505,7 +509,7 @@ class A3Cagent(threading.Thread):
             Tur_R = 0
 
         # if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
-        if Rod_R < 0 or self.db.train_DB['Step'] >= 5000 or self.Reactor_power >= 0.9470:
+        if Rod_R < 0 or self.db.train_DB['Step'] >= 4800: # or self.Reactor_power >= 0.9470:
             done = True
         else:
             done = False
@@ -888,3 +892,8 @@ class CNS:
 if __name__ == '__main__':
     test = MainModel()
     test.run()
+
+    #MainNet(net_type='LSTM', input_pa=6, output_pa=3, time_leg=10)
+    #MainNet(net_type='DNN', input_pa=6, output_pa=3, time_leg=10)
+    #MainNet(net_type='CNN', input_pa=6, output_pa=3, time_leg=10)
+    #MainNet(net_type='CLSTM', input_pa=6, output_pa=3, time_leg=10)
