@@ -19,7 +19,7 @@ import os
 import shutil
 #------------------------------------------------------------------
 
-MAKE_FILE_PATH = './VER_33_LSTM'
+MAKE_FILE_PATH = './VER_34_LSTM_1'
 os.mkdir(MAKE_FILE_PATH)
 
 #------------------------------------------------------------------
@@ -253,7 +253,7 @@ class A3Cagent(threading.Thread):
     def __init__(self, Remote_ip, Remote_port, CNS_ip, CNS_port, Rod_net, Turbine_net, Sess, Summary_ops):
         threading.Thread.__init__(self)
         # 운전 관련 정보 분당 x%
-        self.operation_mode = 1
+        self.operation_mode = 1.0
 
         # CNS와 통신과 데이터 교환이 가능한 모듈 호출
         self.CNS = CNS(self.name, CNS_ip, CNS_port, Remote_ip, Remote_port)
@@ -303,8 +303,8 @@ class A3Cagent(threading.Thread):
         if True:
             # 원자로 출력 값을 사용하여 최대 최소 바운더리의 값을 구함.
             base_condition = self.Time_tick / (30000 / self.operation_mode)
-            up_base_condition = (self.Time_tick * 53) / 1470000
-            low_base_condition = (self.Time_tick * 3) / 98000  # (30000 / self.operation_mode)
+            up_base_condition = (self.Time_tick * 53) / (1470000 / self.operation_mode)
+            low_base_condition = (self.Time_tick * 3) / (98000/ self.operation_mode)  # (30000 / self.operation_mode)
 
             self.stady_condition = base_condition + 0.02
 
@@ -403,6 +403,7 @@ class A3Cagent(threading.Thread):
             self.send_action_append(['KSWO100'], [0])
         if self.main_feed_valve_1_state == 1 or self.main_feed_valve_2_state == 1 or self.main_feed_valve_3_state == 1:
             self.send_action_append(['KSWO171', 'KSWO165', 'KSWO159'], [0, 0, 0])
+        self.send_action_append(['KSWO78'], [1])
 
         # 절차서 구성 순서로 진행
         # 1) 출력이 4% 이상에서 터빈 set point를 맞춘다.
@@ -508,11 +509,20 @@ class A3Cagent(threading.Thread):
         else:
             Tur_R = 0
 
-        # if Rod_R < 0 or Tur_R < 0 or self.db.train_DB['Step'] >= 3000:
-        if Rod_R < 0 or self.db.train_DB['Step'] >= 4800: # or self.Reactor_power >= 0.9470:
-            done = True
+        # 출력 증가율 정하는 부분 -----------------------------
+        if self.operation_mode == 1.0:
+            if Rod_R < 0 or self.db.train_DB['Step'] >= 4800:  # or self.Reactor_power >= 0.9470: ## oper 1%
+                done = True
+            else:
+                done = False
+        elif self.operation_mode == 1.5:
+            if Rod_R < 0 or self.db.train_DB['Step'] >= 3600: # or self.Reactor_power >= 0.9470:
+                done = True
+            else:
+                done = False
         else:
-            done = False
+            print('지원하지 않는 운전 출력')
+        # ----------------------------------------------------
 
         if self.db.train_DB['Step'] >= 700 and self.Mwe_power < 1:
             done = True
